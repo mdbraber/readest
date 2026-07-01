@@ -66,6 +66,13 @@
 
 For self-host setup details see [docs/selfhost-client.md](./docs/selfhost-client.md) and the [docker/](./docker/) directory.
 
+## Credits
+
+Several changes in this fork were directly ported from or inspired by the work of others:
+
+- **[luoji12103](https://github.com/luoji12103/readest-self-hosted)** — the self-hosting foundation: custom server config fetch/resolve (`customServerConfig.ts`), runtime config env-var API, `ServerSettingsPanel` settings UI, self-host CI workflows, and `docs/selfhost-client.md`.
+- **[Nidere](https://github.com/Nidere/readest-self-host)** ([commit 86bbe31](https://github.com/Nidere/readest-self-host/commit/86bbe31e218530b5a8abecb3789710bf900e59a9)) — reading-position sync improvements: per-field merge in `/api/sync` protecting position from stale opens, pull-on-flip with temporal-newness conflict resolution, fresh-local detection after PWA reinstall, `lastPersistedProgressSig` tracker, XPointer→CFI fallback, `view.goTo` retry for slow book loads, and debounce tuning.
+
 ---
 
 ## Features
