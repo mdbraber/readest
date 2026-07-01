@@ -33,11 +33,16 @@ local PULL_ONLINE_POLL_MAX      = 8
 -- several seconds to become usable even though isOnline() already returns
 -- true (it only checks Microsoft's NCSI DNS host, not our backend). A token
 -- refresh fired in that window fails at the network level ("Unknown error",
--- nil response). Retry the resume pull with backoff over ~30s so the refresh
--- lands once the connection is genuinely usable. The cap also stops quickly
--- if the refresh token is actually revoked.
-local REFRESH_RETRY_MAX   = 5
-local REFRESH_RETRY_DELAY = 6
+-- nil response) — verified against server logs, which show no record of the
+-- failed attempts (they die in transit) and a 200 once the route settles.
+-- Retry the resume pull with a graduated backoff: dense early (delay grows
+-- STEP × attempt) to catch the common case where the route settles within a
+-- few seconds, widening up to MAX_DELAY to cover the occasional ~30s settle
+-- after very long inactivity. Attempts land at ~2,6,12,20,28,36s. The retry
+-- cap stops quickly if the refresh token is actually revoked.
+local REFRESH_RETRY_MAX       = 6   -- retries after the initial attempt
+local REFRESH_RETRY_STEP      = 2   -- delay grows STEP × attempt …
+local REFRESH_RETRY_MAX_DELAY = 8   -- … capped here (seconds)
 local SUPABAE_ANON_KEY_BASE64 = "ZXlKaGJHY2lPaUpJVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKemRYQmhZbUZ6WlNJc0luSmxaaUk2SW5aaWMzbDRablZ6YW1weFpIaHJhbkZzZVhOaklpd2ljbTlzWlNJNkltRnViMjRpTENKcFlYUWlPakUzTXpReE1qTTJOekVzSW1WNGNDSTZNakEwT1RZNU9UWTNNWDAuM1U1VXFhb3VfMVNnclZlMWVvOXJBcGMwdUtqcWhwUWRVWGh2d1VIbVVmZw=="
 
 local DEFAULT_API_BASE_URL = "https://web.readest.com"
@@ -610,7 +615,9 @@ function ReadestSync:ensureClient(interactive, callback)
                     and not self._refresh_retry_scheduled then
                 self._refresh_retry_scheduled = true
                 self._refresh_retries = (self._refresh_retries or 0) + 1
-                UIManager:scheduleIn(REFRESH_RETRY_DELAY, function()
+                local delay = math.min(
+                    REFRESH_RETRY_STEP * self._refresh_retries, REFRESH_RETRY_MAX_DELAY)
+                UIManager:scheduleIn(delay, function()
                     self._refresh_retry_scheduled = false
                     self:pullWhenOnline()
                 end)
