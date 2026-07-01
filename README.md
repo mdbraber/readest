@@ -3,18 +3,18 @@
 
 ## Changes in this fork
 
-| Area | Change |
-| --- | --- |
-| **Self-host docker stack** | `docker/` compose files, Caddy config, and Supabase DB migrations to run the full backend yourself |
-| **Custom server discovery** | Runtime config API (`/api/public/runtime-config`) and `.well-known` endpoint so clients can discover your server URL automatically |
-| **Server switcher UI** | Settings panel where users can enter and test a custom server URL at runtime without rebuilding the app |
-| **KOReader plugin** | `apps/readest.koplugin/` — a KOReader sync plugin with custom-server support, Supabase auth, and WiFi-resilient pull (retries when the device comes online) |
-| **Sync improvements** | `progressUpdatedAt` watermark so idle devices cannot clobber newer progress; "Sync on focus" toggle to pull progress when the app comes to the foreground |
-| **Auth for self-host** | Auth helpers adapted to resolve the Supabase URL and anon key from the configured server rather than hardcoded constants |
-| **Self-host build scripts** | `scripts/patch-tauri-selfhost.mjs` patches Tauri config for self-host builds; `scripts/prepare-selfhost-backport.sh` and `scripts/scan-public-fork-safety.sh` for release hygiene |
-| **iOS config anonymized** | Real bundle IDs, team IDs, and provisioning identifiers replaced with placeholders so the config is safe to commit publicly |
-| **CI/CD removed** | Upstream GitHub Actions workflows removed — not needed on a personal fork |
-| **DeepL dynamic endpoint** | DeepL translation provider resolves the API endpoint from the active server at call time instead of at module load |
+| Area | Change | Commit |
+| --- | --- | --- |
+| **Self-host docker stack** | `docker/` compose files, Caddy config, and Supabase DB migrations to run the full backend yourself | [5c19b4f](https://github.com/mdbraber/readest/commit/5c19b4f0) |
+| **Custom server discovery** | Runtime config API (`/api/public/runtime-config`) and `.well-known` endpoint so clients can discover your server URL automatically | [6544ef2](https://github.com/mdbraber/readest/commit/6544ef21) |
+| **Server switcher UI** | Settings panel where users can enter and test a custom server URL at runtime without rebuilding the app | [6544ef2](https://github.com/mdbraber/readest/commit/6544ef21) |
+| **KOReader plugin** | `apps/readest.koplugin/` — a KOReader sync plugin with custom-server support, Supabase auth, and WiFi-resilient pull (retries when the device comes online) | [6854eb0](https://github.com/mdbraber/readest/commit/6854eb0b) |
+| **Sync improvements** | `progressUpdatedAt` watermark so idle devices cannot clobber newer progress; "Sync on focus" toggle to pull progress when the app comes to the foreground | [1de24f4](https://github.com/mdbraber/readest/commit/1de24f49) |
+| **Auth for self-host** | Auth helpers adapted to resolve the Supabase URL and anon key from the configured server rather than hardcoded constants | [cda967a](https://github.com/mdbraber/readest/commit/cda967a5) |
+| **Self-host build scripts** | `scripts/patch-tauri-selfhost.mjs` patches Tauri config for self-host builds; `scripts/prepare-selfhost-backport.sh` and `scripts/scan-public-fork-safety.sh` for release hygiene | [5c19b4f](https://github.com/mdbraber/readest/commit/5c19b4f0) |
+| **iOS config anonymized** | Real bundle IDs, team IDs, and provisioning identifiers replaced with placeholders so the config is safe to commit publicly | [562fc30](https://github.com/mdbraber/readest/commit/562fc301) |
+| **CI/CD removed** | Upstream GitHub Actions workflows removed — not needed on a personal fork | [bd79033](https://github.com/mdbraber/readest/commit/bd79033d) |
+| **DeepL dynamic endpoint** | DeepL translation provider resolves the API endpoint from the active server at call time instead of at module load | [14932ff](https://github.com/mdbraber/readest/commit/14932ffb) |
 
 For self-host setup details see [docs/selfhost-client.md](./docs/selfhost-client.md) and the [docker/](./docker/) directory.
 
