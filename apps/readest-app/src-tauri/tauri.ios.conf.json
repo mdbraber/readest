@@ -1,0 +1,10 @@
+{
+  "plugins": {
+    "deep-link": {
+      "mobile": [
+        { "scheme": ["https"], "host": "web.readest.com", "appLink": false },
+        { "scheme": ["readest"], "appLink": false }
+      ]
+    }
+  }
+}
