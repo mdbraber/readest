@@ -1,3 +1,32 @@
+> **Personal fork** — this is [mdbraber/readest](https://github.com/mdbraber/readest), a fork of [readest/readest](https://github.com/readest/readest).
+> The reader experience is identical to upstream. The additions below are specific to self-hosting and KOReader sync.
+
+## Changes in this fork
+
+| Area | Change |
+| --- | --- |
+| **Self-host docker stack** | `docker/` compose files, Caddy config, and Supabase DB migrations to run the full backend yourself |
+| **Custom server discovery** | Runtime config API (`/api/public/runtime-config`) and `.well-known` endpoint so clients can discover your server URL automatically |
+| **Server switcher UI** | Settings panel where users can enter and test a custom server URL at runtime without rebuilding the app |
+| **KOReader plugin** | `apps/readest.koplugin/` — a KOReader sync plugin with custom-server support, Supabase auth, and WiFi-resilient pull (retries when the device comes online) |
+| **Sync improvements** | `progressUpdatedAt` watermark so idle devices cannot clobber newer progress; "Sync on focus" toggle to pull progress when the app comes to the foreground |
+| **Auth for self-host** | Auth helpers adapted to resolve the Supabase URL and anon key from the configured server rather than hardcoded constants |
+| **Self-host build scripts** | `scripts/patch-tauri-selfhost.mjs` patches Tauri config for self-host builds; `scripts/prepare-selfhost-backport.sh` and `scripts/scan-public-fork-safety.sh` for release hygiene |
+| **iOS config anonymized** | Real bundle IDs, team IDs, and provisioning identifiers replaced with placeholders so the config is safe to commit publicly |
+| **CI/CD removed** | Upstream GitHub Actions workflows removed — not needed on a personal fork |
+| **DeepL dynamic endpoint** | DeepL translation provider resolves the API endpoint from the active server at call time instead of at module load |
+
+For self-host setup details see [docs/selfhost-client.md](./docs/selfhost-client.md) and the [docker/](./docker/) directory.
+
+## Credits
+
+Several changes in this fork were directly ported from or inspired by the work of others:
+
+- **[luoji12103](https://github.com/luoji12103/readest-self-hosted)** — the self-hosting foundation: custom server config fetch/resolve (`customServerConfig.ts`), runtime config env-var API, `ServerSettingsPanel` settings UI, self-host CI workflows, and `docs/selfhost-client.md`.
+- **[Nidere](https://github.com/Nidere/readest-self-host)** ([commit 86bbe31](https://github.com/Nidere/readest-self-host/commit/86bbe31e218530b5a8abecb3789710bf900e59a9)) — reading-position sync improvements: per-field merge in `/api/sync` protecting position from stale opens, pull-on-flip with temporal-newness conflict resolution, fresh-local detection after PWA reinstall, `lastPersistedProgressSig` tracker, XPointer→CFI fallback, `view.goTo` retry for slow book loads, and debounce tuning.
+
+---
+
 <div align="center">
   <a href="https://readest.com?utm_source=github&utm_medium=referral&utm_campaign=readme" target="_blank">
     <img src="https://github.com/readest/readest/blob/main/apps/readest-app/src-tauri/icons/icon.png?raw=true" alt="Readest Logo" width="20%" />
@@ -41,37 +70,6 @@
     <img src="./data/screenshots/landing_all_platforms.png" alt="Readest Banner" width="100%" />
   </a>
 </div>
-
----
-
-> **Personal fork** — this is [mdbraber/readest](https://github.com/mdbraber/readest), a fork of [readest/readest](https://github.com/readest/readest).
-> The reader experience is identical to upstream. The additions below are specific to self-hosting and KOReader sync.
->
-> [中文说明](./docs/README.zh-CN.md)
-
-## Changes in this fork
-
-| Area | Change |
-| --- | --- |
-| **Self-host docker stack** | `docker/` compose files, Caddy config, and Supabase DB migrations to run the full backend yourself |
-| **Custom server discovery** | Runtime config API (`/api/public/runtime-config`) and `.well-known` endpoint so clients can discover your server URL automatically |
-| **Server switcher UI** | Settings panel where users can enter and test a custom server URL at runtime without rebuilding the app |
-| **KOReader plugin** | `apps/readest.koplugin/` — a KOReader sync plugin with custom-server support, Supabase auth, and WiFi-resilient pull (retries when the device comes online) |
-| **Sync improvements** | `progressUpdatedAt` watermark so idle devices cannot clobber newer progress; "Sync on focus" toggle to pull progress when the app comes to the foreground |
-| **Auth for self-host** | Auth helpers adapted to resolve the Supabase URL and anon key from the configured server rather than hardcoded constants |
-| **Self-host build scripts** | `scripts/patch-tauri-selfhost.mjs` patches Tauri config for self-host builds; `scripts/prepare-selfhost-backport.sh` and `scripts/scan-public-fork-safety.sh` for release hygiene |
-| **iOS config anonymized** | Real bundle IDs, team IDs, and provisioning identifiers replaced with placeholders so the config is safe to commit publicly |
-| **CI/CD removed** | Upstream GitHub Actions workflows removed — not needed on a personal fork |
-| **DeepL dynamic endpoint** | DeepL translation provider resolves the API endpoint from the active server at call time instead of at module load |
-
-For self-host setup details see [docs/selfhost-client.md](./docs/selfhost-client.md) and the [docker/](./docker/) directory.
-
-## Credits
-
-Several changes in this fork were directly ported from or inspired by the work of others:
-
-- **[luoji12103](https://github.com/luoji12103/readest-self-hosted)** — the self-hosting foundation: custom server config fetch/resolve (`customServerConfig.ts`), runtime config env-var API, `ServerSettingsPanel` settings UI, self-host CI workflows, and `docs/selfhost-client.md`.
-- **[Nidere](https://github.com/Nidere/readest-self-host)** ([commit 86bbe31](https://github.com/Nidere/readest-self-host/commit/86bbe31e218530b5a8abecb3789710bf900e59a9)) — reading-position sync improvements: per-field merge in `/api/sync` protecting position from stale opens, pull-on-flip with temporal-newness conflict resolution, fresh-local detection after PWA reinstall, `lastPersistedProgressSig` tracker, XPointer→CFI fallback, `view.goTo` retry for slow book loads, and debounce tuning.
 
 ---
 
