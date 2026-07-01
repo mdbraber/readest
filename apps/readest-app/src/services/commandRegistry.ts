@@ -6,7 +6,7 @@ import { LiaHandPointerSolid } from 'react-icons/lia';
 import { IoAccessibilityOutline } from 'react-icons/io5';
 import { PiRobot, PiSpeakerHigh, PiSun, PiMoon } from 'react-icons/pi';
 import { TbSunMoon } from 'react-icons/tb';
-import { MdRefresh } from 'react-icons/md';
+import { MdDns, MdRefresh } from 'react-icons/md';
 import { IconType } from 'react-icons';
 import { stubTranslation as _ } from '@/utils/misc';
 
@@ -155,6 +155,7 @@ const panelIcons: Record<SettingsPanelType, IconType> = {
   Language: RiTranslate,
   AI: PiRobot,
   Integrations: RiShareLine,
+  Server: MdDns,
   Custom: IoAccessibilityOutline,
 };
 
@@ -618,6 +619,16 @@ const customPanelItems = [
   },
 ];
 
+// server panel items
+const serverPanelItems = [
+  {
+    id: 'settings.server.url',
+    labelKey: _('Server URL'),
+    keywords: ['server', 'self-hosted', 'selfhost', 'custom', 'backend', 'api', 'endpoint'],
+    section: 'Server Settings',
+  },
+];
+
 const actionItems = [
   {
     id: 'action.toggleTheme',
@@ -739,6 +750,11 @@ export const buildCommandRegistry = (options: CommandRegistryOptions): CommandIt
   // add custom panel items
   for (const def of customPanelItems) {
     items.push(createSettingsItem(def, 'Custom'));
+  }
+
+  // add server panel items
+  for (const def of serverPanelItems) {
+    items.push(createSettingsItem(def, 'Server'));
   }
 
   // add action items

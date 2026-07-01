@@ -6,6 +6,12 @@ vi.mock('@/services/constants', () => ({
   READEST_NODE_BASE_URL: 'https://node.readest.com',
 }));
 
+const getCustomServerRuntimeConfigMock = vi.fn();
+
+vi.mock('@/services/customServerConfig', () => ({
+  getCustomServerRuntimeConfig: () => getCustomServerRuntimeConfigMock(),
+}));
+
 // We need to reset modules between tests to pick up env var changes,
 // so we import dynamically in each test or test group.
 
@@ -17,6 +23,7 @@ beforeEach(() => {
   vi.resetModules();
   Object.keys(env).forEach((key) => delete env[key]);
   Object.assign(env, originalEnv);
+  getCustomServerRuntimeConfigMock.mockReset();
   // Clean up any window globals we set
   delete (window as unknown as Record<string, unknown>)['__READEST_CLI_ACCESS'];
   delete (window as unknown as Record<string, unknown>)['__READEST_RUNTIME_CONFIG'];
@@ -113,6 +120,34 @@ describe('environment', () => {
       };
       env['NEXT_PUBLIC_API_BASE_URL'] = 'https://custom-api.example.com';
       const { getBaseUrl } = await import('@/services/environment');
+      expect(getBaseUrl()).toBe('https://runtime-api.example.com');
+    });
+
+    test('returns custom server apiBaseUrl before runtime config on tauri', async () => {
+      env['NEXT_PUBLIC_APP_PLATFORM'] = 'tauri';
+      getCustomServerRuntimeConfigMock.mockReturnValue({
+        apiBaseUrl: 'https://custom-server.example.com',
+      });
+      window.__READEST_RUNTIME_CONFIG = {
+        apiBaseUrl: 'https://runtime-api.example.com',
+      };
+
+      const { getBaseUrl } = await import('@/services/environment');
+
+      expect(getBaseUrl()).toBe('https://custom-server.example.com');
+    });
+
+    test('ignores custom server config on web platform', async () => {
+      env['NEXT_PUBLIC_APP_PLATFORM'] = 'web';
+      getCustomServerRuntimeConfigMock.mockReturnValue({
+        apiBaseUrl: 'https://custom-server.example.com',
+      });
+      window.__READEST_RUNTIME_CONFIG = {
+        apiBaseUrl: 'https://runtime-api.example.com',
+      };
+
+      const { getBaseUrl } = await import('@/services/environment');
+
       expect(getBaseUrl()).toBe('https://runtime-api.example.com');
     });
 

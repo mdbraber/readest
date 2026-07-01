@@ -27,6 +27,7 @@ vi.mock('react-icons/tb', () => ({
   TbSunMoon: () => null,
 }));
 vi.mock('react-icons/md', () => ({
+  MdDns: () => null,
   MdRefresh: () => null,
 }));
 vi.mock('react-icons', () => ({
@@ -87,6 +88,7 @@ describe('buildCommandRegistry', () => {
     expect(panels.has('Color')).toBe(true);
     expect(panels.has('Control')).toBe(true);
     expect(panels.has('Language')).toBe(true);
+    expect(panels.has('Server')).toBe(true);
     expect(panels.has('Custom')).toBe(true);
   });
 
