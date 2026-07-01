@@ -238,6 +238,7 @@ export interface SystemSettings {
 
   keepLogin: boolean;
   autoUpload: boolean;
+  syncOnFocus: boolean;
   alwaysOnTop: boolean;
   openBookInNewWindow: boolean;
   autoCheckUpdates: boolean;

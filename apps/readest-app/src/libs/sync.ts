@@ -3,7 +3,7 @@ import { getAPIBaseUrl } from '@/services/environment';
 import { getAccessToken } from '@/utils/access';
 import { fetchWithTimeout } from '@/utils/fetch';
 
-const SYNC_API_ENDPOINT = getAPIBaseUrl() + '/sync';
+const getSyncApiEndpoint = () => `${getAPIBaseUrl()}/sync`;
 
 export type SyncType = 'books' | 'configs' | 'notes' | 'stats';
 export type SyncOp = 'push' | 'pull' | 'both';
@@ -69,7 +69,7 @@ export class SyncClient {
     if (!token) throw new Error('Not authenticated');
 
     const limitParam = limit && limit > 0 ? `&limit=${encodeURIComponent(limit)}` : '';
-    const url = `${SYNC_API_ENDPOINT}?since=${encodeURIComponent(since)}&type=${type ?? ''}&book=${book ?? ''}&meta_hash=${metaHash ?? ''}${limitParam}`;
+    const url = `${getSyncApiEndpoint()}?since=${encodeURIComponent(since)}&type=${type ?? ''}&book=${book ?? ''}&meta_hash=${metaHash ?? ''}${limitParam}`;
     const res = await fetchWithTimeout(
       url,
       {
@@ -97,7 +97,7 @@ export class SyncClient {
     if (!token) throw new Error('Not authenticated');
 
     const res = await fetchWithTimeout(
-      SYNC_API_ENDPOINT,
+      getSyncApiEndpoint(),
       {
         method: 'POST',
         headers: {

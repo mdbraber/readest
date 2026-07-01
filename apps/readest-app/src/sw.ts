@@ -28,9 +28,10 @@ const serwist = new Serwist({
   runtimeCaching: [
     {
       matcher: ({ url, request }) => {
-        const clientRoutes = ['/library', '/reader'];
-        const isClientRoute = clientRoutes.some((route) => url.pathname.startsWith(route));
-        return isClientRoute && request.mode === 'navigate';
+        // Catch ALL same-origin navigations (not just /library and /reader)
+        // so the offline fallback chain below can rescue any URL — including
+        // root `/` which the user lands on when launching the PWA offline.
+        return request.mode === 'navigate' && url.origin === self.location.origin;
       },
       handler: new NetworkFirst({
         cacheName: 'client-pages',
@@ -49,6 +50,31 @@ const serwist = new Serwist({
               const basePath = url.pathname.split('/')[1];
               const cacheKey = `${url.origin}/${basePath}`;
               return cacheKey;
+            },
+          },
+          {
+            // Hard fallback chain so navigations never end up as
+            // FetchEvent.respondWith no-response (the Safari "can't open the
+            // page" error). Tries: any /library cache, any /reader cache,
+            // any precached document, finally a synthetic Response.
+            handlerDidError: async () => {
+              const candidates = [
+                'https://readest.nidere.com/library',
+                'https://readest.nidere.com/reader',
+                'https://readest.nidere.com/',
+                '/offline',
+              ];
+              for (const url of candidates) {
+                const r = await caches.match(url, { ignoreSearch: true });
+                if (r) return r;
+              }
+              return new Response(
+                '<!doctype html><meta charset=utf-8><title>Offline</title>' +
+                  '<style>body{font:14px system-ui;padding:2em;color:#888;text-align:center}</style>' +
+                  '<p>You are offline and this page has not been cached yet.</p>' +
+                  '<p>Open Wi-Fi and reload to populate the cache.</p>',
+                { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+              );
             },
           },
         ],

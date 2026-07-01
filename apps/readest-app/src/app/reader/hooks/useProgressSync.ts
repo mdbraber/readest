@@ -1,80 +1,83 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { useEnv } from '@/context/EnvContext';
 import { useSync } from '@/hooks/useSync';
+import { useSyncContext } from '@/context/SyncContext';
 import { BookConfig, FIXED_LAYOUT_FORMATS } from '@/types/book';
+import { DBBookConfig } from '@/types/records';
 import { useBookDataStore } from '@/store/bookDataStore';
+import { useLibraryStore } from '@/store/libraryStore';
 import { useReaderStore } from '@/store/readerStore';
-import { useBookProgress } from '@/store/readerProgressStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useTranslation } from '@/hooks/useTranslation';
-import { mergeProofreadRules } from '@/utils/proofread';
 import { serializeConfig } from '@/utils/serializer';
+import { transformBookConfigFromDB } from '@/utils/transform';
 import { CFI } from '@/libs/document';
 import { debounce } from '@/utils/debounce';
 import { eventDispatcher } from '@/utils/event';
 import { DEFAULT_BOOK_SEARCH_CONFIG, SYNC_PROGRESS_INTERVAL_SEC } from '@/services/constants';
 import { getCFIFromXPointer, getXPointerFromCFI } from '@/utils/xcfi';
-import { isMalformedLocationCfi } from '@/utils/cfi';
-
-// Backoff schedule for the first-pull retry on book open. After these
-// attempts the gate releases unconditionally so the user's progress can
-// still sync out even if the server keeps timing out (high Android network
-// concurrency, captive portal, transient 5xx). Total window ≈ 15.5s.
-const PULL_RETRY_DELAYS_MS = [1500, 4000, 10000];
+import { useWindowActiveChanged } from './useWindowActiveChanged';
 
 export const useProgressSync = (bookKey: string) => {
   const _ = useTranslation();
-  // Per-field selectors avoid subscribing this hook's host (FoliateViewer)
-  // to the WHOLE bookDataStore — saveConfig writes booksData on every
-  // throttled save and would otherwise re-render the entire reader subtree.
-  const getConfig = useBookDataStore((s) => s.getConfig);
-  const saveConfig = useBookDataStore((s) => s.saveConfig);
-  const getBookData = useBookDataStore((s) => s.getBookData);
-  const getView = useReaderStore((s) => s.getView);
-  const getViewSettings = useReaderStore((s) => s.getViewSettings);
-  const setViewSettings = useReaderStore((s) => s.setViewSettings);
-  const recreateViewer = useReaderStore((s) => s.recreateViewer);
-  const setHoveredBookKey = useReaderStore((s) => s.setHoveredBookKey);
-  const { envConfig } = useEnv();
+  const { getConfig, setConfig, getBookData } = useBookDataStore();
+  const { getView, getProgress, setHoveredBookKey } = useReaderStore();
   const { settings } = useSettingsStore();
-  const { syncedConfigs, syncConfigs } = useSync(bookKey);
+  const { syncedConfigs, syncConfigs, syncBooks } = useSync(bookKey);
+  const { syncClient } = useSyncContext();
   const { user } = useAuth();
-  // Reactive subscription on this book's progress so the effects below
-  // (auto-push debounce, initial pull) re-run when the user turns the
-  // page. Reads from readerProgressStore, not readerStore — see
-  // store/readerProgressStore.ts for why this split exists.
-  const progress = useBookProgress(bookKey);
+  const progress = getProgress(bookKey);
 
   const configPulled = useRef(false);
   const hasPulledConfigOnce = useRef(false);
-  const pullAttempt = useRef(0);
-  const pullInFlight = useRef(false);
-  const pullRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const clearPendingPullRetry = () => {
-    if (pullRetryTimer.current !== null) {
-      clearTimeout(pullRetryTimer.current);
-      pullRetryTimer.current = null;
-    }
-  };
+  // Captured at first hook-run, BEFORE any saveConfig has bumped state.
+  // true = no real reading position on this device yet (fresh PWA install,
+  // never opened here, etc.) — server should win unconditionally.
+  const initialFreshness = useRef<boolean | null>(null);
+  // The progressUpdatedAt we KNOW the server has. Updated when:
+  //   (a) initial-open pull processes server data
+  //   (b) flip-sync applies server data (server-wins branch)
+  //   (c) flip-sync pushes local data (local-wins branch)
+  // Compared against fresh server timestamps on every flip — NOT against
+  // local config.progressUpdatedAt, because that gets bumped to NOW by
+  // useProgressAutoSave on every flip and would defeat the pull-on-flip
+  // semantics ("local is always newer").
+  const lastSyncedProgressTs = useRef<number>(0);
 
   const pushConfig = async (bookKey: string, config: BookConfig | null) => {
     const book = getBookData(bookKey)?.book;
     if (!config || !book || !user) return;
-    const bookHash = book.hash;
+    const bookHash = bookKey.split('-')[0]!;
     const metaHash = book.metaHash;
     const newConfig = { ...config, bookHash, metaHash };
     const compressedConfig = JSON.parse(
       serializeConfig(newConfig, settings.globalViewSettings, DEFAULT_BOOK_SEARCH_CONFIG),
     );
     delete compressedConfig.booknotes;
-    // The /api/sync POST handler piggybacks books.progress + books.updated_at
-    // off this configs push (saves the separate syncBooks round-trip that
-    // used to keep the library record fresh while a reader stayed open —
-    // see issue #4198). useBooksSync still seeds new books rows when the
-    // user is on the library page.
+    console.log("[sync-push] pushing config", {
+      bookHash,
+      progressUpdatedAt: compressedConfig.progressUpdatedAt,
+      updatedAt: compressedConfig.updatedAt,
+      progress: compressedConfig.progress,
+      location: compressedConfig.location,
+    });
     await syncConfigs([compressedConfig], bookHash, metaHash, 'push');
+
+    // Remember what we just pushed so future flips know the server's state.
+    lastSyncedProgressTs.current =
+      config.progressUpdatedAt ?? config.updatedAt ?? lastSyncedProgressTs.current;
+
+    // Also push the corresponding `books` row. The library sync lane
+    // (useBooksSync) only runs while the library page is mounted, so while a
+    // reader stays open the server's `books` record is never re-pushed and
+    // other devices' library pull-to-refresh keeps showing stale progress
+    // (issue #4198). useProgressAutoSave has already merged config.progress
+    // into the in-memory library Book via saveConfig, so we just forward
+    // that book through the books lane.
+    const libraryBook = useLibraryStore.getState().library.find((b) => b.hash === bookHash);
+    if (libraryBook && !libraryBook.deletedAt) {
+      await syncBooks([libraryBook], 'push');
+    }
   };
 
   const pullConfig = async (bookKey: string) => {
@@ -85,154 +88,30 @@ export const useProgressSync = (bookKey: string) => {
     await syncConfigs([], bookHash, metaHash, 'pull');
   };
 
-  // Drives the pull on book open. A successful pull is signalled by the
-  // [syncedConfigs] effect below flipping `configPulled.current` to true and
-  // clearing the retry state — so this function just kicks off the next
-  // pull and (re)schedules a retry. If the gate is still closed after
-  // PULL_RETRY_DELAYS_MS is exhausted, release it unconditionally so the
-  // user's auto-push isn't blocked by a server outage. Re-entry while a
-  // pull is in flight or a retry timer is pending is a no-op.
-  const pullWithRetry = useCallback(async () => {
-    if (configPulled.current) return;
-    if (pullInFlight.current) return;
-    if (pullRetryTimer.current !== null) return;
-    pullInFlight.current = true;
-    try {
-      await pullConfig(bookKey);
-    } finally {
-      pullInFlight.current = false;
-    }
-    if (configPulled.current) return;
-    if (pullAttempt.current >= PULL_RETRY_DELAYS_MS.length) {
-      // Best-effort release. The server-side last-writer-wins compare still
-      // protects the cross-device case (a stale local push with an older
-      // updated_at will lose to a fresher server record).
-      configPulled.current = true;
-      return;
-    }
-    const delay = PULL_RETRY_DELAYS_MS[pullAttempt.current]!;
-    pullAttempt.current += 1;
-    pullRetryTimer.current = setTimeout(() => {
-      pullRetryTimer.current = null;
-      if (!configPulled.current) pullWithRetry();
-    }, delay);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookKey]);
-
-  const syncConfig = async () => {
-    if (!configPulled.current) {
-      pullWithRetry();
-    } else {
-      // Skip pushes while previewing a deep-link target — the position in
-      // memory reflects the annotation, not what the user is actually reading.
-      if (useReaderStore.getState().getViewState(bookKey)?.previewMode) return;
-      const config = getConfig(bookKey);
-      const view = getView(bookKey);
-      const book = getBookData(bookKey)?.book;
-      if (config && view && book && config.progress && config.progress[0] > 0) {
-        try {
-          const contents = view.renderer.getContents();
-          const primaryIndex = view.renderer.primaryIndex;
-          const content = contents.find((x) => x.index === primaryIndex) ?? contents[0];
-          if (content && !FIXED_LAYOUT_FORMATS.has(book.format)) {
-            const { doc, index } = content;
-            const xpointerResult = await getXPointerFromCFI(config.location!, doc, index || 0);
-            config.xpointer = xpointerResult.xpointer;
-          }
-        } catch (error) {
-          console.warn('Failed to convert CFI to XPointer', error);
-        }
-        pushConfig(bookKey, config);
-      }
-    }
-  };
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const handleAutoSync = useCallback(
-    debounce(() => {
-      syncConfig();
-    }, SYNC_PROGRESS_INTERVAL_SEC * 1000),
-    [],
-  );
-
-  const handleSyncBookProgress = async (event: CustomEvent) => {
-    const { bookKey: syncBookKey } = event.detail;
-    if (syncBookKey === bookKey) {
-      // Flush any pending debounced push first so the latest local progress
-      // reaches the cloud before we (re)pull. This covers the book-close case
-      // (issue #4532): the reader can tear down inside the SYNC_PROGRESS_INTERVAL_SEC
-      // auto-sync window, which would otherwise drop the pending push and leave
-      // other devices on the previous cloud-synced position. Must run while the
-      // gate below is still open so syncConfig takes the push branch.
-      handleAutoSync.flush();
-      // Manual pull-to-refresh: tear down any prior retry chain so the new
-      // attempt starts fresh, rather than being short-circuited by the
-      // "retry already pending" guard in pullWithRetry.
-      configPulled.current = false;
-      pullAttempt.current = 0;
-      clearPendingPullRetry();
-      await pullWithRetry();
-    }
-  };
-
-  // Push: flush the pending push + pull when the book is closed or the user
-  // taps the manual Sync button.
-  useEffect(() => {
-    eventDispatcher.on('sync-book-progress', handleSyncBookProgress);
-    return () => {
-      eventDispatcher.off('sync-book-progress', handleSyncBookProgress);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookKey]);
-
-  // Push: auto-push progress when progress changes with a debounce
-  useEffect(() => {
-    if (!progress?.location || !user) return;
-    handleAutoSync();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [progress?.location]);
-
-  // Pull: pull progress once when the book is opened, with retry on failure
-  useEffect(() => {
-    if (!progress || hasPulledConfigOnce.current) return;
-    hasPulledConfigOnce.current = true;
-    pullWithRetry();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [progress]);
-
-  // Clean up any pending retry timer on unmount so it doesn't fire after the
-  // reader has been torn down.
-  useEffect(() => {
-    return () => clearPendingPullRetry();
-  }, []);
-
-  const applyRemoteProgress = async (syncedConfigs: BookConfig[]) => {
+  // Apply a single remote config to local state and view. Returns the
+  // applied server progressUpdatedAt so the caller can update lastSyncedProgressTs.
+  // If view isn't ready yet (book still loading), retries up to ~3s.
+  const applyServerConfig = async (syncedConfig: BookConfig): Promise<number> => {
     const config = getConfig(bookKey);
-    const book = getBookData(bookKey)?.book;
-    if (!syncedConfigs || syncedConfigs.length === 0 || !config || !book) return;
+    if (!config) return 0;
 
-    const bookHash = bookKey.split('-')[0]!;
-    const metaHash = book.metaHash;
-    let syncedConfig = syncedConfigs.filter(
-      (c) => c.bookHash === bookHash || c.metaHash === metaHash,
-    )[0];
-    if (syncedConfig) {
-      // Discard a malformed synced location (an empty-start/end range CFI left by
-      // the cfi-inert skip-link bug, e.g. `epubcfi(/6/24!/4,,/20/1:58)`) so it
-      // can't move the reader or be persisted — it resolves to a section-spanning
-      // range and jumps to the wrong end of the section. A valid xpointer below
-      // can still recover the real position.
-      if (syncedConfig.location && isMalformedLocationCfi(syncedConfig.location)) {
-        syncedConfig = { ...syncedConfig, location: undefined };
-      }
-      const configCFI = config?.location;
-      let remoteCFILocation = syncedConfig.location;
-      const xpointer = syncedConfig.xpointer;
-      const bookData = getBookData(bookKey);
-      const view = getView(bookKey);
-      if (xpointer && view && bookData && bookData.bookDoc) {
-        const pContents = view.renderer.getContents();
-        const pIdx = view.renderer.primaryIndex;
+    const configCFI = config?.location;
+    let remoteCFILocation = syncedConfig.location;
+    const xpointer = syncedConfig.xpointer;
+    const bookData = getBookData(bookKey);
+
+    // Update local config immediately so future events see server's data
+    const filteredSyncedConfig = Object.fromEntries(
+      Object.entries(syncedConfig).filter(([_, value]) => value !== null && value !== undefined),
+    );
+    setConfig(bookKey, { ...config, ...filteredSyncedConfig });
+
+    // Try to resolve xpointer to CFI if view+bookDoc available now
+    const earlyView = getView(bookKey);
+    if (xpointer && earlyView && bookData && bookData.bookDoc) {
+      try {
+        const pContents = earlyView.renderer.getContents();
+        const pIdx = earlyView.renderer.primaryIndex;
         const content = pContents.find((x) => x.index === pIdx) ?? pContents[0];
         const candidateCFI = await getCFIFromXPointer(
           xpointer,
@@ -243,73 +122,244 @@ export const useProgressSync = (bookKey: string) => {
         if (!remoteCFILocation || CFI.compare(remoteCFILocation, candidateCFI) < 0) {
           remoteCFILocation = candidateCFI;
         }
+      } catch (error) {
+        console.warn('[sync] Remote XPointer unresolvable; falling back to CFI', error);
       }
-      // Reading progress applies below. Proofread (find/replace) rules merge
-      // separately just after; other config fields remain device-local.
-      // TODO: general config sync via a more robust profile-based solution.
-      if (remoteCFILocation && configCFI) {
-        if (CFI.compare(configCFI, remoteCFILocation) < 0) {
-          // While previewing a deep-link target, do NOT yank the view to the
-          // remote position — the user came here to look at a specific
-          // annotation. The local config still gets updated above; the next
-          // open will resolve to the synced position normally.
-          const isPreview = useReaderStore.getState().getViewState(bookKey)?.previewMode;
-          if (view && !isPreview) {
-            view.goTo(remoteCFILocation);
-            setHoveredBookKey(null);
-            eventDispatcher.dispatch('hint', {
-              bookKey,
-              message: _('Reading Progress Synced'),
-            });
-          }
-        }
+    }
+
+    const samePosition =
+      configCFI && remoteCFILocation && CFI.compare(configCFI, remoteCFILocation) === 0;
+    if (samePosition) {
+      // Already at this position — counts as applied.
+      return syncedConfig.progressUpdatedAt ?? syncedConfig.updatedAt ?? 0;
+    }
+    if (!remoteCFILocation) {
+      // Couldn't resolve a navigable position (e.g. xpointer conversion failed).
+      // Do not advance the watermark so the next sync will retry.
+      return 0;
+    }
+
+    const isPreview = useReaderStore.getState().getViewState(bookKey)?.previewMode;
+    if (isPreview) {
+      return syncedConfig.progressUpdatedAt ?? syncedConfig.updatedAt ?? 0;
+    }
+
+    // Retry view.goTo until view is available (book may still be loading)
+    const targetCFI = remoteCFILocation;
+    const tryGoTo = (attempt = 0): void => {
+      const view = getView(bookKey);
+      if (view) {
+        console.log('[sync] Applying server position to view', {
+          configCFI,
+          remoteCFILocation: targetCFI,
+          attempt,
+        });
+        view.goTo(targetCFI);
+        setHoveredBookKey(null);
+        eventDispatcher.dispatch('hint', {
+          bookKey,
+          message: _('Reading Progress Synced'),
+        });
+        return;
       }
-      // Merge book/selection-scope proofread rules from the remote config by id.
-      // Library-scope rules sync via the settings replica, so they're excluded.
-      // Item-level CRDT (see utils/proofread.ts) keeps a concurrent edit on
-      // another device from being lost to whole-config last-writer-wins, and
-      // tombstones stop a deleted rule from being resurrected by a stale peer.
-      const remoteRules = (syncedConfig.viewSettings?.proofreadRules ?? []).filter(
-        (r) => r.scope !== 'library',
+      if (attempt >= 100) {
+        console.warn('[sync] view never became ready; giving up on goTo', { targetCFI });
+        return;
+      }
+      setTimeout(() => tryGoTo(attempt + 1), 100);
+    };
+    tryGoTo();
+
+    return syncedConfig.progressUpdatedAt ?? syncedConfig.updatedAt ?? 0;
+  };
+
+  // Per-flip / per-chapter-jump sync. Pull fresh server state, decide who
+  // wins by comparing serverProgTs against lastSyncedProgressTs.current.
+  //   - server > lastSeen  → apply server position (server moved while we read)
+  //   - else               → push local position
+  const syncOnPositionChange = async () => {
+    if (!user) return;
+    const book = getBookData(bookKey)?.book;
+    const config = getConfig(bookKey);
+    const view = getView(bookKey);
+    if (!config || !book || !view) return;
+    if (useReaderStore.getState().getViewState(bookKey)?.previewMode) return;
+    if (!config.progress || config.progress[0] === 0) return;
+
+    const bookHash = bookKey.split('-')[0]!;
+    const metaHash = book.metaHash;
+
+    // Pull fresh server state for this specific book
+    let serverConfig: BookConfig | undefined;
+    try {
+      const result = await syncClient.pullChanges(0, 'configs', bookHash, metaHash);
+      const dbConfigs = (result.configs ?? []) as unknown as DBBookConfig[];
+      const transformed = dbConfigs.map((c) => transformBookConfigFromDB(c));
+      serverConfig = transformed.find(
+        (c) => c.bookHash === bookHash || c.metaHash === metaHash,
       );
-      const localViewSettings = getViewSettings(bookKey);
-      const localRules = localViewSettings?.proofreadRules ?? [];
-      if (localViewSettings && (remoteRules.length || localRules.length)) {
-        const mergedRules = mergeProofreadRules(localRules, remoteRules);
-        if (JSON.stringify(mergedRules) !== JSON.stringify(localRules)) {
-          const updatedViewSettings = { ...localViewSettings, proofreadRules: mergedRules };
-          setViewSettings(bookKey, updatedViewSettings);
-          if (config) {
-            await saveConfig(
-              envConfig,
-              bookKey,
-              { ...config, viewSettings: updatedViewSettings, updatedAt: Date.now() },
-              settings,
-            );
-          }
-          // Refresh a live view so merged rules take effect immediately; a
-          // not-yet-rendered view picks them up from viewSettings on first
-          // render. Skip while previewing a deep-link target.
-          const isPreview = useReaderStore.getState().getViewState(bookKey)?.previewMode;
-          if (getView(bookKey) && !isPreview) {
-            recreateViewer(envConfig, bookKey);
-          }
-        }
+    } catch (err) {
+      console.warn('[sync] pull-on-flip failed; falling through to push', err);
+    }
+
+    if (serverConfig) {
+      const serverProgTs =
+        serverConfig.progressUpdatedAt ?? serverConfig.updatedAt ?? 0;
+      const lastSeen = lastSyncedProgressTs.current;
+      const serverIsNewer = serverProgTs > lastSeen;
+      console.log('[sync] flip-sync decision', {
+        serverProgTs,
+        lastSeen,
+        action: serverIsNewer ? 'apply-server' : 'push-local',
+      });
+      if (serverIsNewer) {
+        const appliedTs = await applyServerConfig(serverConfig);
+        lastSyncedProgressTs.current = appliedTs;
+        return;
       }
+    }
+
+    // Local is the source of truth → enrich CFI → xpointer and push.
+    try {
+      const contents = view.renderer.getContents();
+      const primaryIndex = view.renderer.primaryIndex;
+      const content = contents.find((x) => x.index === primaryIndex) ?? contents[0];
+      if (content && !FIXED_LAYOUT_FORMATS.has(book.format)) {
+        const { doc, index } = content;
+        const xpointerResult = await getXPointerFromCFI(config.location!, doc, index || 0);
+        config.xpointer = xpointerResult.xpointer;
+      }
+    } catch (error) {
+      console.warn('[sync] Failed to convert CFI to XPointer', error);
+    }
+    await pushConfig(bookKey, config);
+  };
+
+  const handleSyncBookProgress = async (event: CustomEvent) => {
+    const { bookKey: syncBookKey } = event.detail;
+    if (syncBookKey === bookKey) {
+      configPulled.current = false;
+      await pullConfig(bookKey);
     }
   };
 
-  // Pull: proccess the pulled progress
   useEffect(() => {
-    if (!configPulled.current && syncedConfigs) {
-      configPulled.current = true;
-      // Pull succeeded — cancel any in-flight retry chain and reset the
-      // attempt counter so a future sync-book-progress event starts clean.
-      pullAttempt.current = 0;
-      clearPendingPullRetry();
-      applyRemoteProgress(syncedConfigs).catch((error) => {
-        console.error('Failed to apply remote progress', error);
+    eventDispatcher.on('sync-book-progress', handleSyncBookProgress);
+    return () => {
+      eventDispatcher.off('sync-book-progress', handleSyncBookProgress);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookKey]);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const handleAutoSync = useCallback(
+    debounce(() => {
+      // While the initial-open pull hasn't completed, just keep trying it.
+      // Once configPulled is true, every flip runs full pull-then-decide.
+      if (configPulled.current) {
+        syncOnPositionChange();
+      } else {
+        pullConfig(bookKey);
+      }
+    }, SYNC_PROGRESS_INTERVAL_SEC * 1000),
+    [],
+  );
+
+  // Auto-sync on every position change (debounced)
+  useEffect(() => {
+    if (!progress?.location || !user) return;
+    handleAutoSync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progress?.location]);
+
+  // Sync on focus: when the window/tab is brought to the foreground, run the
+  // same pull-then-decide as a flip so a position advanced on another device
+  // (e.g. a Kindle) is caught up. Gated on the Sync-on-focus setting; the
+  // shared 1s debounce in handleAutoSync collapses the focus+visibility burst
+  // mobile webviews fire on a single foreground transition.
+  useWindowActiveChanged((isActive) => {
+    if (isActive && settings.syncOnFocus && user && progress?.location) {
+      handleAutoSync();
+    }
+  });
+
+  // Immediate initial pull when book opens. Capture initialFreshness here
+  // SYNCHRONOUSLY before saveConfig can race in and bump progressUpdatedAt.
+  useEffect(() => {
+    if (!progress || hasPulledConfigOnce.current) return;
+    hasPulledConfigOnce.current = true;
+    const c = getConfig(bookKey);
+    // Fresh = this device never recorded a real flip for this book. The
+    // only reliable signal is the absence of progressUpdatedAt. The current
+    // config.progress / config.location are unreliable because foliate's
+    // initial setProgress already wrote a synthetic position into the store
+    // before this useEffect ran (see readerStore.setProgress).
+    initialFreshness.current = c ? !c.progressUpdatedAt : true;
+    console.log('[sync] captured initial freshness', {
+      bookKey,
+      isFresh: initialFreshness.current,
+      progressUpdatedAt: c?.progressUpdatedAt,
+      location: c?.location,
+      progress: c?.progress,
+    });
+    pullConfig(bookKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progress]);
+
+  // Process the initial-open pull result
+  useEffect(() => {
+    if (configPulled.current || !syncedConfigs) return;
+    configPulled.current = true;
+
+    const config = getConfig(bookKey);
+    const book = getBookData(bookKey)?.book;
+    if (!config || !book) {
+      lastSyncedProgressTs.current = 0;
+      return;
+    }
+
+    const bookHash = bookKey.split('-')[0]!;
+    const metaHash = book.metaHash;
+    const localProgTs = config.progressUpdatedAt ?? config.updatedAt ?? 0;
+    const syncedConfig = syncedConfigs.find(
+      (c) => c.bookHash === bookHash || c.metaHash === metaHash,
+    );
+    if (!syncedConfig) {
+      // No server record for this book → server has whatever local has
+      // (we will push on first flip).
+      lastSyncedProgressTs.current = localProgTs;
+      return;
+    }
+
+    const remoteProgTs =
+      syncedConfig.progressUpdatedAt ?? syncedConfig.updatedAt ?? 0;
+
+    // Use snapshot captured at hook init (before foliate's synthetic
+    // initial setProgress could pollute). Fallback to current state if
+    // somehow not captured yet.
+    const localIsFresh =
+      initialFreshness.current ?? !config.progressUpdatedAt;
+
+    if (localIsFresh || remoteProgTs > localProgTs) {
+      console.log('[sync] initial-pull: applying server position', {
+        reason: localIsFresh ? 'fresh-local' : 'server-newer',
+        localProgTs,
+        remoteProgTs,
+        localIsFresh,
       });
+      applyServerConfig(syncedConfig)
+        .then((appliedTs) => {
+          lastSyncedProgressTs.current = appliedTs;
+        })
+        .catch((error) => {
+          console.error('[sync] Failed to apply initial remote progress', error);
+        });
+    } else {
+      console.log('[sync] initial-pull: local is up-to-date', {
+        localProgTs,
+        remoteProgTs,
+      });
+      lastSyncedProgressTs.current = Math.max(localProgTs, remoteProgTs);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncedConfigs]);

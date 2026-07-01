@@ -36,6 +36,7 @@ export interface DBBookConfig {
   created_at?: string;
   updated_at?: string;
   deleted_at?: string | null;
+  progress_updated_at?: string | null;
 }
 
 export interface DBBookNote {

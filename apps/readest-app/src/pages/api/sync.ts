@@ -7,111 +7,9 @@ import { transformBookConfigToDB } from '@/utils/transform';
 import { transformBookNoteToDB } from '@/utils/transform';
 import { transformBookToDB } from '@/utils/transform';
 import { runMiddleware, corsAllMethods } from '@/utils/cors';
-import {
-  SyncData,
-  SyncRecord,
-  SyncResult,
-  SyncType,
-  StatBookRecord,
-  StatPageRecord,
-} from '@/libs/sync';
+import { SyncData, SyncRecord, SyncResult, SyncType } from '@/libs/sync';
 import { validateUserAndToken } from '@/utils/access';
 import { DBBook, DBBookConfig } from '@/types/records';
-
-const pageKey = (r: StatPageRecord) => `${r.book_hash}|${r.page}|${r.start_time}`;
-
-/**
- * Decide which incoming page events to write: new keys always win; existing
- * keys win only when the incoming duration is strictly longer (union/upsert
- * semantics — KOReader-compatible).
- */
-export function pickWinningPages(
-  incoming: StatPageRecord[],
-  server: Map<string, StatPageRecord>,
-): { toUpsert: StatPageRecord[] } {
-  const toUpsert: StatPageRecord[] = [];
-  for (const rec of incoming) {
-    const existing = server.get(pageKey(rec));
-    if (!existing || rec.duration > existing.duration) toUpsert.push(rec);
-  }
-  return { toUpsert };
-}
-
-/**
- * Field-level last-writer-wins for a books row's reading_status: return the
- * status fields with the newer reading_status_updated_at (ties → client). NULL
- * timestamp = epoch 0. Lets reading_status survive even when the whole row is
- * decided the other way by updated_at (which page-turn progress dominates) —
- * issue #4634.
- */
-/**
- * `undefined` (the client omitted reading_status entirely — e.g. a locally
- * imported book that never had a status set) and `null` (the DB default) both
- * mean "no reading status". Collapse them so a statusless book never registers
- * as a status change. Without this, the `statusChanged` branch below rewrites
- * `updated_at = now()` on every push for such books, and since the 1-day
- * re-sync window re-pushes recently-touched books each cycle, they get a fresh
- * timestamp every sync and pin themselves to the top of the date-sorted
- * library.
- */
-export const readingStatusChanged = (client?: string | null, server?: string | null): boolean =>
-  (client ?? null) !== (server ?? null);
-
-export function resolveReadingStatusMerge(
-  client: Pick<DBBook, 'reading_status' | 'reading_status_updated_at'>,
-  server: Pick<DBBook, 'reading_status' | 'reading_status_updated_at'>,
-): Pick<DBBook, 'reading_status' | 'reading_status_updated_at'> {
-  const ms = (s?: string | null) => (s ? new Date(s).getTime() : 0);
-  return ms(client.reading_status_updated_at) >= ms(server.reading_status_updated_at)
-    ? {
-        reading_status: client.reading_status,
-        reading_status_updated_at: client.reading_status_updated_at,
-      }
-    : {
-        reading_status: server.reading_status,
-        reading_status_updated_at: server.reading_status_updated_at,
-      };
-}
-
-/**
- * Build the row written when the server wins a books row by `updated_at` but
- * the client's reading_status is the fresher one: graft the status onto the
- * server row and leave everything else — crucially `updated_at` — untouched.
- *
- * The `books_set_synced_at` trigger stamps `synced_at = now()` on this write,
- * so peers re-pull the status change via the synced_at cursor without the
- * date-read library (sorted by updated_at) jumping to sync-processing time.
- * Previously this rewrote `updated_at = now()` to force propagation, which was
- * the #4677 reorder symptom. See issue #4678.
- */
-export function buildStatusPropagationRow(
-  serverBook: DBBook,
-  status: Pick<DBBook, 'reading_status' | 'reading_status_updated_at'>,
-): DBBook {
-  return {
-    ...serverBook,
-    reading_status: status.reading_status,
-    reading_status_updated_at: status.reading_status_updated_at,
-  };
-}
-
-/**
- * Field-level last-writer-wins for a books row's cover: return the
- * {cover_hash, cover_updated_at} with the newer cover_updated_at (ties →
- * client). NULL timestamp = epoch 0. A cover edit shares the row with
- * page-turn progress, so this lets the cover survive even when the whole row
- * is decided the other way by updated_at — the same #4634 hazard the
- * reading_status merge addresses (issue #4544).
- */
-export function resolveCoverMerge(
-  client: Pick<DBBook, 'cover_hash' | 'cover_updated_at'>,
-  server: Pick<DBBook, 'cover_hash' | 'cover_updated_at'>,
-): Pick<DBBook, 'cover_hash' | 'cover_updated_at'> {
-  const ms = (s?: string | null) => (s ? new Date(s).getTime() : 0);
-  return ms(client.cover_updated_at) >= ms(server.cover_updated_at)
-    ? { cover_hash: client.cover_hash, cover_updated_at: client.cover_updated_at }
-    : { cover_hash: server.cover_hash, cover_updated_at: server.cover_updated_at };
-}
 
 const transformsToDB = {
   books: transformBookToDB,
@@ -141,10 +39,6 @@ export async function GET(req: NextRequest) {
   const typeParam = searchParams.get('type') as SyncType | undefined;
   const bookParam = searchParams.get('book');
   const metaHashParam = searchParams.get('meta_hash');
-  // Optional page size for `type=stats` (client-driven paged pull). Absent for
-  // the koplugin, which keeps the full-delta response.
-  const statsLimitParam = searchParams.get('limit');
-  const statsLimit = statsLimitParam ? Math.max(1, Math.floor(Number(statsLimitParam))) : 0;
 
   if (!sinceParam) {
     return NextResponse.json({ error: '"since" query parameter is required' }, { status: 400 });
@@ -158,7 +52,7 @@ export async function GET(req: NextRequest) {
   const sinceIso = since.toISOString();
 
   try {
-    const results: SyncResult = { books: [], configs: [], notes: [], statBooks: [], statPages: [] };
+    const results: SyncResult = { books: [], configs: [], notes: [] };
     const errors: Record<TableName, DBError | null> = {
       books: null,
       book_notes: null,
@@ -170,13 +64,6 @@ export async function GET(req: NextRequest) {
       let allRecords: SyncRecord[] = [];
       let offset = 0;
       let hasMore = true;
-
-      // books keys the pull on the server-assigned `synced_at` cursor, which a
-      // trigger bumps on every write — including deletes — so a server-resolved
-      // merge propagates without touching updated_at (the date-read sort key).
-      // configs/notes have no server-side merge, so they stay on updated_at and
-      // still need the explicit deleted_at clause. See issue #4678.
-      const cursorColumn = table === 'books' ? 'synced_at' : 'updated_at';
 
       while (hasMore) {
         let query = supabase
@@ -193,14 +80,8 @@ export async function GET(req: NextRequest) {
           query = query.eq('meta_hash', metaHashParam);
         }
 
-        if (cursorColumn === 'synced_at') {
-          query = query.gt('synced_at', sinceIso);
-        } else {
-          query = query.or(`updated_at.gt.${sinceIso},deleted_at.gt.${sinceIso}`);
-        }
-        query = query.order(cursorColumn, { ascending: false });
-
-        console.log('Querying table:', table, 'since:', sinceIso, 'offset:', offset);
+        query = query.or(`updated_at.gt.${sinceIso},deleted_at.gt.${sinceIso}`);
+        query = query.order('updated_at', { ascending: false });
 
         const { data, error } = await query;
         if (error) throw { table, error } as DBError;
@@ -262,99 +143,6 @@ export async function GET(req: NextRequest) {
     if (!typeParam || typeParam === 'notes') {
       await queryTables('book_notes', ['id']).catch((err) => (errors['book_notes'] = err));
     }
-    if (!typeParam || typeParam === 'stats') {
-      // PostgREST caps responses at ~1000 rows; stat_pages grows one row per page
-      // event, so page through both tables (ordered by updated_at ascending for a
-      // stable cursor) and accumulate every row — otherwise a device pulling >1000
-      // events only gets the first page and then advances its cursor past the rest.
-      const PAGE = 1000;
-      const fetchAll = async (table: 'stat_books' | 'stat_pages', filterBook: boolean) => {
-        const all: Record<string, unknown>[] = [];
-        let offset = 0;
-        for (;;) {
-          let q = supabase
-            .from(table)
-            .select('*')
-            .eq('user_id', user.id)
-            .or(`updated_at.gt.${sinceIso},deleted_at.gt.${sinceIso}`)
-            .order('updated_at', { ascending: true })
-            .range(offset, offset + PAGE - 1);
-          if (filterBook && bookParam) q = q.eq('book_hash', bookParam);
-          const { data, error } = await q;
-          if (error) return { error };
-          const rows = (data ?? []) as Record<string, unknown>[];
-          all.push(...rows);
-          if (rows.length < PAGE) break;
-          offset += PAGE;
-        }
-        return { data: all };
-      };
-      // A single bounded page of stat_pages for the app's client-driven paged
-      // pull, completed to the trailing updated_at millisecond so the client can
-      // advance its cursor with a strict `> cursor` without skipping ties.
-      const fetchPagedPages = async () => {
-        let q = supabase
-          .from('stat_pages')
-          .select('*')
-          .eq('user_id', user.id)
-          .or(`updated_at.gt.${sinceIso},deleted_at.gt.${sinceIso}`)
-          .order('updated_at', { ascending: true })
-          .range(0, statsLimit - 1);
-        if (bookParam) q = q.eq('book_hash', bookParam);
-        const { data, error } = await q;
-        if (error) return { error };
-        const rows = (data ?? []) as Record<string, unknown>[];
-        if (rows.length === statsLimit) {
-          const lastUpdated = rows[rows.length - 1]!['updated_at'] as string;
-          let eq = supabase
-            .from('stat_pages')
-            .select('*')
-            .eq('user_id', user.id)
-            .eq('updated_at', lastUpdated);
-          if (bookParam) eq = eq.eq('book_hash', bookParam);
-          const { data: extra, error: extraErr } = await eq;
-          if (extraErr) return { error: extraErr };
-          const keyOf = (r: Record<string, unknown>) =>
-            `${r['book_hash']}|${r['page']}|${r['start_time']}`;
-          const seen = new Set(rows.map(keyOf));
-          for (const r of (extra ?? []) as Record<string, unknown>[]) {
-            const k = keyOf(r);
-            if (!seen.has(k)) {
-              seen.add(k);
-              rows.push(r);
-            }
-          }
-        }
-        return { data: rows };
-      };
-      // stat_books is always returned in full (one row per book, small); only
-      // stat_pages pages when the client asks (the koplugin omits `limit`).
-      const sb = await fetchAll('stat_books', false);
-      const sp = statsLimit > 0 ? await fetchPagedPages() : await fetchAll('stat_pages', true);
-      if (sb.error)
-        return NextResponse.json(
-          { error: `stat_books: ${sb.error.message || 'Unknown error'}` },
-          { status: 500 },
-        );
-      if (sp.error)
-        return NextResponse.json(
-          { error: `stat_pages: ${sp.error.message || 'Unknown error'}` },
-          { status: 500 },
-        );
-      // Attach updated_at_ms (epoch ms) so non-JS clients (the Lua koplugin) can
-      // compute their pull cursor without parsing ISO-8601 timestamps.
-      const withMs = <T extends { updated_at?: string }>(rows: T[]) =>
-        rows.map((r) => ({
-          ...r,
-          updated_at_ms: r.updated_at ? new Date(r.updated_at).getTime() : 0,
-        }));
-      (
-        results as unknown as { statBooks: StatBookRecord[]; statPages: StatPageRecord[] }
-      ).statBooks = withMs((sb.data ?? []) as unknown as StatBookRecord[]);
-      (
-        results as unknown as { statBooks: StatBookRecord[]; statPages: StatPageRecord[] }
-      ).statPages = withMs((sp.data ?? []) as unknown as StatPageRecord[]);
-    }
 
     const dbErrors = Object.values(errors).filter((err) => err !== null);
     if (dbErrors.length > 0) {
@@ -384,7 +172,7 @@ export async function POST(req: NextRequest) {
   }
   const supabase = createSupabaseClient(token);
   const body = await req.json();
-  const { books = [], configs = [], notes = [], statBooks = [], statPages = [] } = body as SyncData;
+  const { books = [], configs = [], notes = [] } = body as SyncData;
 
   const BATCH_SIZE = 100;
   const upsertRecords = async (
@@ -465,60 +253,7 @@ export async function POST(req: NextRequest) {
           const clientIsNewer =
             clientDeletedAt > serverDeletedAt || clientUpdatedAt > serverUpdatedAt;
 
-          if (table === 'books') {
-            // `dbRec` is DBBook | DBBookConfig; in the 'books' branch it is always DBBook.
-            const clientBook = dbRec as DBBook;
-            // `serverData` is BookDataRecord but the DB row carries the status +
-            // cover columns at runtime — widen the type without going through `unknown`.
-            const serverBook = serverData as BookDataRecord &
-              Partial<
-                Pick<
-                  DBBook,
-                  'reading_status' | 'reading_status_updated_at' | 'cover_hash' | 'cover_updated_at'
-                >
-              >;
-            const status = resolveReadingStatusMerge(clientBook, serverBook);
-            // Cover has its own field-level LWW so a page-turn can't clobber a
-            // cover edit (issue #4544; mirrors reading_status / #4634).
-            const cover = resolveCoverMerge(clientBook, serverBook);
-            if (clientIsNewer) {
-              // Client wins the row; graft the fresher status + cover onto it
-              // (server's may be the newer one even though the row is older).
-              clientBook.reading_status = status.reading_status;
-              clientBook.reading_status_updated_at = status.reading_status_updated_at;
-              clientBook.cover_hash = cover.cover_hash;
-              clientBook.cover_updated_at = cover.cover_updated_at;
-              toUpdate.push(clientBook);
-            } else {
-              // Only rewrite when a resolved field VALUE differs from the
-              // server's — a timestamp-only difference on the same value is a
-              // no-op, and rewriting it would churn updated_at + re-propagate.
-              const statusChanged = readingStatusChanged(
-                status.reading_status,
-                serverBook.reading_status,
-              );
-              const coverChanged = (cover.cover_hash ?? null) !== (serverBook.cover_hash ?? null);
-              if (statusChanged || coverChanged) {
-                // Server wins the row, but the client's status and/or cover is
-                // the fresher one. Graft the fresher fields onto the server row
-                // and leave updated_at untouched; the books_set_synced_at
-                // trigger advances synced_at so peers re-pull via the synced_at
-                // cursor without reordering the date-read library (#4678, #4544).
-                // The runtime DB row carries all DBBook columns; the static type
-                // of `serverBook` is a narrower intersection so `unknown` is
-                // required to bridge the gap at this one construction site.
-                const propagated = buildStatusPropagationRow(
-                  serverBook as unknown as DBBook,
-                  status,
-                );
-                propagated.cover_hash = cover.cover_hash;
-                propagated.cover_updated_at = cover.cover_updated_at;
-                toUpdate.push(propagated);
-              } else {
-                batchAuthoritativeRecords.push(serverData);
-              }
-            }
-          } else if (clientIsNewer) {
+          if (clientIsNewer) {
             toUpdate.push(dbRec);
           } else {
             batchAuthoritativeRecords.push(serverData);
@@ -534,23 +269,45 @@ export async function POST(req: NextRequest) {
           .select();
 
         if (insertError) {
-          console.log(`Failed to insert ${table} records:`, JSON.stringify(toInsert));
           return { error: insertError.message };
         }
         batchAuthoritativeRecords.push(...(inserted || []));
       }
 
-      // Batch upsert
+      // Batch upsert (with per-field merge for book_configs to protect reading position)
       if (toUpdate.length > 0) {
+        let finalToUpdate = toUpdate;
+        if (table === 'book_configs') {
+          finalToUpdate = toUpdate.map((dbRec: any) => {
+            const key = primaryKeys.map((pk) => dbRec[pk]).join('|');
+            const serverData: any = serverRecordsMap.get(key);
+            if (!serverData) return dbRec;
+            // Resolve position timestamps: prefer progress_updated_at, fallback to updated_at
+            const clientProgTs = new Date(dbRec.progress_updated_at || dbRec.updated_at || 0).getTime();
+            const serverProgTs = new Date(serverData.progress_updated_at || serverData.updated_at || 0).getTime();
+            const serverPositionNewer = serverProgTs > clientProgTs;
+            if (serverPositionNewer) {
+              // Keep server's reading position; client's other fields can still win
+              return {
+                ...dbRec,
+                progress: serverData.progress,
+                location: serverData.location,
+                xpointer: serverData.xpointer,
+                rsvp_position: serverData.rsvp_position,
+                progress_updated_at: serverData.progress_updated_at,
+              };
+            }
+            return dbRec;
+          });
+        }
         const { data: updated, error: updateError } = await supabase
           .from(table)
-          .upsert(toUpdate, {
+          .upsert(finalToUpdate, {
             onConflict: ['user_id', ...primaryKeys].join(','),
           })
           .select();
 
         if (updateError) {
-          console.log(`Failed to update ${table} records:`, JSON.stringify(toUpdate));
           return { error: updateError.message };
         }
         batchAuthoritativeRecords.push(...(updated || []));
@@ -572,119 +329,6 @@ export async function POST(req: NextRequest) {
     if (booksResult?.error) throw new Error(booksResult.error);
     if (configsResult?.error) throw new Error(configsResult.error);
     if (notesResult?.error) throw new Error(notesResult.error);
-
-    // Piggyback the per-book reading progress from the configs push onto the
-    // matching `books` row. Other devices' library pull-to-refresh reads
-    // books.progress + books.updated_at, so without this the row would stay
-    // stale until the user navigates back to the library and useBooksSync
-    // re-pushes. The .lt('updated_at') predicate keeps last-writer-wins —
-    // a concurrent newer books push is never downgraded — and a missing
-    // row is a silent no-op (useBooksSync will insert it later).
-    type BookProgressUpdate = {
-      book_hash: string;
-      progress: [number, number];
-      updated_at: string;
-    };
-    const bookProgressUpdates: BookProgressUpdate[] = [];
-    for (const rec of (configsResult.data ?? []) as unknown as DBBookConfig[]) {
-      if (!rec.book_hash || !rec.updated_at || rec.progress == null) continue;
-      let parsed: unknown;
-      try {
-        parsed = typeof rec.progress === 'string' ? JSON.parse(rec.progress) : rec.progress;
-      } catch {
-        continue;
-      }
-      if (
-        !Array.isArray(parsed) ||
-        parsed.length !== 2 ||
-        typeof parsed[0] !== 'number' ||
-        typeof parsed[1] !== 'number'
-      ) {
-        continue;
-      }
-      bookProgressUpdates.push({
-        book_hash: rec.book_hash,
-        progress: [parsed[0], parsed[1]],
-        updated_at: rec.updated_at,
-      });
-    }
-
-    if (bookProgressUpdates.length > 0) {
-      await Promise.all(
-        bookProgressUpdates.map(async (u) => {
-          const { error } = await supabase
-            .from('books')
-            .update({ progress: u.progress, updated_at: u.updated_at })
-            .eq('user_id', user.id)
-            .eq('book_hash', u.book_hash)
-            .lt('updated_at', u.updated_at);
-          if (error) {
-            // Best-effort: never fail the configs push because of this side
-            // effect — useBooksSync will reconcile the row later.
-            console.warn('books.progress piggyback failed for', u.book_hash, error.message);
-          }
-        }),
-      );
-    }
-
-    if (statBooks.length > 0) {
-      const rows = statBooks.map((b: StatBookRecord) => ({
-        user_id: user.id,
-        book_hash: b.book_hash,
-        title: b.title,
-        authors: b.authors,
-        updated_at: new Date().toISOString(),
-        deleted_at: b.deleted_at ?? null,
-      }));
-      const { error } = await supabase
-        .from('stat_books')
-        .upsert(rows, { onConflict: 'user_id,book_hash' });
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-
-    if (statPages.length > 0) {
-      // Process in batches so the "longer-duration-wins" merge stays correct at
-      // scale: the existing-row fetch is scoped to each batch's (book_hash,
-      // start_time) keys (not a book's whole history) and bounded under
-      // PostgREST's ~1000-row cap — otherwise existing rows beyond 1000 are
-      // invisible to pickWinningPages and a shorter duration could overwrite a
-      // longer one.
-      const BATCH = 500;
-      for (let off = 0; off < statPages.length; off += BATCH) {
-        const batch = statPages.slice(off, off + BATCH);
-        const bookHashes = [...new Set(batch.map((p) => p.book_hash))];
-        const startTimes = [...new Set(batch.map((p) => p.start_time))];
-        const { data: existing, error: exErr } = await supabase
-          .from('stat_pages')
-          .select('*')
-          .eq('user_id', user.id)
-          .in('book_hash', bookHashes)
-          .in('start_time', startTimes);
-        if (exErr) return NextResponse.json({ error: exErr.message }, { status: 500 });
-        const serverMap = new Map<string, StatPageRecord>();
-        (existing ?? []).forEach((r) =>
-          serverMap.set(pageKey(r as StatPageRecord), r as StatPageRecord),
-        );
-        const { toUpsert } = pickWinningPages(batch, serverMap);
-        const rows = toUpsert.map((p) => ({
-          user_id: user.id,
-          book_hash: p.book_hash,
-          page: p.page,
-          start_time: p.start_time,
-          duration: p.duration,
-          total_pages: p.total_pages,
-          ext: p.ext ?? null,
-          updated_at: new Date().toISOString(),
-          deleted_at: p.deleted_at ?? null,
-        }));
-        if (rows.length > 0) {
-          const { error } = await supabase
-            .from('stat_pages')
-            .upsert(rows, { onConflict: 'user_id,book_hash,page,start_time' });
-          if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-        }
-      }
-    }
 
     return NextResponse.json(
       {

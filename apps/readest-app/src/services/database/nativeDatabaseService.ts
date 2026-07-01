@@ -28,7 +28,7 @@ export class NativeDatabaseService implements DatabaseService {
     const result: QueryResult = await this.db.execute(sql, params);
     return {
       rowsAffected: result.rowsAffected,
-      lastInsertId: result.lastInsertId,
+      lastInsertId: result.lastInsertId ?? 0,
     };
   }
 

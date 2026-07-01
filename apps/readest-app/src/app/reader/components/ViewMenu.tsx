@@ -54,7 +54,8 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
   const { user } = useAuth();
   const { envConfig, appService } = useEnv();
   const { getConfig, getBookData } = useBookDataStore();
-  const { setSettingsDialogOpen, setSettingsDialogBookKey } = useSettingsStore();
+  const { settings, setSettings, saveSettings, setSettingsDialogOpen, setSettingsDialogBookKey } =
+    useSettingsStore();
   const { getView, getViewSettings, getViewState, getProgress, setViewSettings } = useReaderStore();
   const config = getConfig(bookKey)!;
   const bookData = getBookData(bookKey)!;
@@ -116,6 +117,12 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
     } else {
       eventDispatcher.dispatch('sync-book-progress', { bookKey });
     }
+  };
+
+  const toggleSyncOnFocus = () => {
+    const updated = { ...settings, syncOnFocus: !settings.syncOnFocus };
+    setSettings(updated);
+    saveSettings(envConfig, updated);
   };
 
   const handleStartRSVP = () => {
@@ -428,6 +435,14 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
           </button>
         }
       />
+
+      {user && (
+        <MenuItem
+          label={_('Sync on focus')}
+          Icon={settings.syncOnFocus ? MdCheck : undefined}
+          onClick={toggleSyncOnFocus}
+        />
+      )}
 
       <hr aria-hidden='true' className='border-base-300 my-1' />
 
