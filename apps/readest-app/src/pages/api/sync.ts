@@ -332,14 +332,15 @@ export async function POST(req: NextRequest) {
       if (toUpdate.length > 0) {
         let finalToUpdate = toUpdate;
         if (table === 'book_configs') {
-          finalToUpdate = toUpdate.map((dbRec: any) => {
-            const key = primaryKeys.map((pk) => dbRec[pk]).join('|');
-            const serverData: any = serverRecordsMap.get(key);
+          finalToUpdate = toUpdate.map((dbRec) => {
+            const cfg = dbRec as DBBookConfig;
+            const cfgKey = primaryKeys
+              .map((pk) => (cfg as unknown as Record<string, string>)[pk])
+              .join('|');
+            const serverData = serverRecordsMap.get(cfgKey) as DBBookConfig | undefined;
             if (!serverData) return dbRec;
             // Resolve position timestamps: prefer progress_updated_at, fallback to updated_at
-            const clientProgTs = new Date(
-              dbRec.progress_updated_at || dbRec.updated_at || 0,
-            ).getTime();
+            const clientProgTs = new Date(cfg.progress_updated_at || cfg.updated_at || 0).getTime();
             const serverProgTs = new Date(
               serverData.progress_updated_at || serverData.updated_at || 0,
             ).getTime();
@@ -347,7 +348,7 @@ export async function POST(req: NextRequest) {
             if (serverPositionNewer) {
               // Keep server's reading position; client's other fields can still win
               return {
-                ...dbRec,
+                ...cfg,
                 progress: serverData.progress,
                 location: serverData.location,
                 xpointer: serverData.xpointer,
