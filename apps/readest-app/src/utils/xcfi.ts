@@ -191,8 +191,19 @@ export class XCFI {
    * Supports two KOReader text reference formats:
    * - `/text().N`     — cumulative character offset across all text in the element
    * - `/text()[K].N`  — Kth direct text node child (1-based), offset N within that node
+   *
+   * Also handles the spine-root format KOReader emits at chapter boundaries:
+   * - `/body/DocFragment[N].M` — offset M within the spine item root (no /body child path)
    */
   private parseXPointer(xpointer: string): { element: Element; textOffset?: number } {
+    // Format: /body/DocFragment[N].M — position within spine item root, no deeper path.
+    // KOReader emits this when the reading position is at the very start of a chapter.
+    const docFragmentRootMatch = xpointer.match(/^\/body\/DocFragment\[\d+\]\.(\d+)$/);
+    if (docFragmentRootMatch) {
+      const textOffset = parseInt(docFragmentRootMatch[1]!, 10);
+      return { element: this.document.body, textOffset: textOffset > 0 ? textOffset : undefined };
+    }
+
     // Format: /text()[K].N — indexed text node with offset
     const indexedTextMatch = xpointer.match(/\/text\(\)\[(\d+)\]\.(\d+)$/);
     if (indexedTextMatch) {

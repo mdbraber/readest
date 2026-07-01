@@ -22,6 +22,7 @@ export const transformBookConfigToDB = (bookConfig: unknown, userId: string): DB
     searchConfig,
     viewSettings,
     updatedAt,
+    progressUpdatedAt,
   } = bookConfig as BookConfig;
 
   return {
@@ -35,6 +36,7 @@ export const transformBookConfigToDB = (bookConfig: unknown, userId: string): DB
     search_config: searchConfig && JSON.stringify(searchConfig),
     view_settings: viewSettings && JSON.stringify(viewSettings),
     updated_at: new Date(updatedAt ?? Date.now()).toISOString(),
+    progress_updated_at: new Date(progressUpdatedAt ?? updatedAt ?? Date.now()).toISOString(),
   };
 };
 
@@ -49,6 +51,7 @@ export const transformBookConfigFromDB = (dbBookConfig: DBBookConfig): BookConfi
     search_config,
     view_settings,
     updated_at,
+    progress_updated_at,
   } = dbBookConfig;
   return {
     bookHash: book_hash,
@@ -60,6 +63,7 @@ export const transformBookConfigFromDB = (dbBookConfig: DBBookConfig): BookConfi
     searchConfig: search_config && JSON.parse(search_config),
     viewSettings: view_settings && JSON.parse(view_settings),
     updatedAt: new Date(updated_at!).getTime(),
+    progressUpdatedAt: progress_updated_at ? new Date(progress_updated_at).getTime() : undefined,
   } as BookConfig;
 };
 
@@ -76,9 +80,6 @@ export const transformBookToDB = (book: unknown, userId: string): DBBook => {
     tags,
     progress,
     readingStatus,
-    readingStatusUpdatedAt,
-    coverHash,
-    coverUpdatedAt,
     metadata,
     createdAt,
     updatedAt,
@@ -98,11 +99,6 @@ export const transformBookToDB = (book: unknown, userId: string): DBBook => {
     tags: tags,
     progress: progress,
     reading_status: readingStatus,
-    reading_status_updated_at: readingStatusUpdatedAt
-      ? new Date(readingStatusUpdatedAt).toISOString()
-      : null,
-    cover_hash: coverHash ?? null,
-    cover_updated_at: coverUpdatedAt ? new Date(coverUpdatedAt).toISOString() : null,
     source_title: sanitizeString(sourceTitle),
     metadata: metadata ? sanitizeString(JSON.stringify(metadata)) : null,
     created_at: new Date(createdAt ?? Date.now()).toISOString(),
@@ -124,9 +120,6 @@ export const transformBookFromDB = (dbBook: DBBook): Book => {
     tags,
     progress,
     reading_status,
-    reading_status_updated_at,
-    cover_hash,
-    cover_updated_at,
     source_title,
     metadata,
     created_at,
@@ -146,11 +139,6 @@ export const transformBookFromDB = (dbBook: DBBook): Book => {
     tags: tags,
     progress: progress,
     readingStatus: reading_status as ReadingStatus,
-    readingStatusUpdatedAt: reading_status_updated_at
-      ? new Date(reading_status_updated_at).getTime()
-      : undefined,
-    coverHash: cover_hash ?? null,
-    coverUpdatedAt: cover_updated_at ? new Date(cover_updated_at).getTime() : null,
     sourceTitle: source_title,
     metadata: metadata ? JSON.parse(metadata) : null,
     createdAt: new Date(created_at!).getTime(),

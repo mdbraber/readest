@@ -1,7 +1,7 @@
 import { getAPIBaseUrl } from '@/services/environment';
 import { fetchWithAuth } from '@/utils/fetch';
 
-const SHARE_API = getAPIBaseUrl() + '/share';
+const getShareApi = () => `${getAPIBaseUrl()}/share`;
 
 export interface CreateShareInput {
   bookHash: string;
@@ -83,7 +83,7 @@ const jsonHeaders = { 'Content-Type': 'application/json' };
 
 // Owner-only. Creates a share row for an already-uploaded book.
 export const createShare = async (input: CreateShareInput): Promise<CreateShareResponse> => {
-  const response = await fetchWithAuth(`${SHARE_API}/create`, {
+  const response = await fetchWithAuth(`${getShareApi()}/create`, {
     method: 'POST',
     headers: jsonHeaders,
     body: JSON.stringify(input),
@@ -94,7 +94,7 @@ export const createShare = async (input: CreateShareInput): Promise<CreateShareR
 
 // Public. Used by the landing page to render metadata.
 export const getShare = async (token: string): Promise<ShareMetadata> => {
-  const response = await fetch(`${SHARE_API}/${encodeURIComponent(token)}`, {
+  const response = await fetch(`${getShareApi()}/${encodeURIComponent(token)}`, {
     method: 'GET',
     cache: 'no-store',
   });
@@ -105,7 +105,7 @@ export const getShare = async (token: string): Promise<ShareMetadata> => {
 // Owner-only. Revokes a share immediately. Note that already-minted presigned
 // download URLs remain valid until their TTL expires (max ~5 min).
 export const revokeShare = async (token: string): Promise<void> => {
-  const response = await fetchWithAuth(`${SHARE_API}/${encodeURIComponent(token)}/revoke`, {
+  const response = await fetchWithAuth(`${getShareApi()}/${encodeURIComponent(token)}/revoke`, {
     method: 'POST',
   });
   if (!response.ok) throw await parseError(response);
@@ -113,11 +113,11 @@ export const revokeShare = async (token: string): Promise<void> => {
 
 // Owner-only. Paginated list of the caller's shares (active + expired).
 export const listShares = async (cursor?: string | null): Promise<ShareListResponse> => {
-  // SHARE_API is relative in dev (`/api/share`) and absolute in prod, so we
+  // getShareApi() is relative in dev (`/api/share`) and absolute in prod, so we
   // can't use `new URL()` here unconditionally — relative paths throw
   // "Invalid URL" without a base. Build the query string manually.
   const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
-  const response = await fetchWithAuth(`${SHARE_API}/list${qs}`, { method: 'GET' });
+  const response = await fetchWithAuth(`${getShareApi()}/list${qs}`, { method: 'GET' });
   if (!response.ok) throw await parseError(response);
   return (await response.json()) as ShareListResponse;
 };
@@ -127,7 +127,7 @@ export const listShares = async (cursor?: string | null): Promise<ShareListRespo
 // non-deleted file with the same book_hash, returns alreadyOwned: true and
 // the existing fileId.
 export const importShare = async (token: string): Promise<ImportShareResponse> => {
-  const response = await fetchWithAuth(`${SHARE_API}/${encodeURIComponent(token)}/import`, {
+  const response = await fetchWithAuth(`${getShareApi()}/${encodeURIComponent(token)}/import`, {
     method: 'POST',
   });
   if (!response.ok) throw await parseError(response);
@@ -139,7 +139,7 @@ export const importShare = async (token: string): Promise<ImportShareResponse> =
 // the user-visible action does NOT depend on this succeeding.
 export const confirmDownload = async (token: string): Promise<void> => {
   try {
-    await fetch(`${SHARE_API}/${encodeURIComponent(token)}/download/confirm`, {
+    await fetch(`${getShareApi()}/${encodeURIComponent(token)}/download/confirm`, {
       method: 'POST',
       cache: 'no-store',
       keepalive: true,

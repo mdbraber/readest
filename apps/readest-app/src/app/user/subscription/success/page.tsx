@@ -10,9 +10,9 @@ import { PlanType } from '@/types/quota';
 import { VerifiedIAP } from '@/libs/payment/iap/types';
 import Spinner from '@/components/Spinner';
 
-const STRIPE_CHECK_URL = `${getAPIBaseUrl()}/stripe/check`;
-const APPLE_IAP_VERIFY_URL = `${getNodeAPIBaseUrl()}/apple/iap-verify`;
-const ANDROID_IAP_VERIFY_URL = `${getNodeAPIBaseUrl()}/google/iap-verify`;
+const getStripeCheckUrl = () => `${getAPIBaseUrl()}/stripe/check`;
+const getAppleIapVerifyUrl = () => `${getNodeAPIBaseUrl()}/apple/iap-verify`;
+const getAndroidIapVerifyUrl = () => `${getNodeAPIBaseUrl()}/google/iap-verify`;
 
 interface SessionStatus {
   status: 'loading' | 'completed' | 'failed' | 'processing';
@@ -55,7 +55,7 @@ const SuccessPageWithSearchParams = () => {
   const updateStripeSessionStatus = async () => {
     try {
       const token = await getAccessToken();
-      const response = await fetch(STRIPE_CHECK_URL, {
+      const response = await fetch(getStripeCheckUrl(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -104,7 +104,7 @@ const SuccessPageWithSearchParams = () => {
     }
     try {
       const token = await getAccessToken();
-      const response = await fetch(APPLE_IAP_VERIFY_URL, {
+      const response = await fetch(getAppleIapVerifyUrl(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -158,7 +158,7 @@ const SuccessPageWithSearchParams = () => {
 
     try {
       const token = await getAccessToken();
-      const response = await fetch(ANDROID_IAP_VERIFY_URL, {
+      const response = await fetch(getAndroidIapVerifyUrl(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

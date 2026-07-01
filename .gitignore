@@ -54,3 +54,7 @@ result*
 .claude/worktrees
 .claude/settings.local.json
 
+docker-compose.override.yml
+
+# Local KOReader deploy helper (untracked)
+deploy-koreader.sh

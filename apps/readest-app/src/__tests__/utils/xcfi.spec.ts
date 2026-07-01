@@ -596,4 +596,23 @@ describe('CFIToXPointerConverter', () => {
       expect(wrapped.cfiToXPointer(cfi).xpointer).toBe(base.cfiToXPointer(cfi).xpointer);
     });
   });
+
+  describe('spine-root XPointer /body/DocFragment[N].M', () => {
+    it('converts /body/DocFragment[N].0 (chapter start) to a valid CFI', () => {
+      const conv = new XCFI(simpleDoc, 19); // spine index 19 = DocFragment[20]
+      const cfi = conv.xPointerToCFI('/body/DocFragment[20].0');
+      expect(cfi).toMatch(/^epubcfi\(/);
+      expect(cfi).toContain('/6/40!'); // spine step for index 19 = (19+1)*2 = 40
+    });
+
+    it('converts /body/DocFragment[N].0 without throwing', () => {
+      const conv = new XCFI(simpleDoc, 0);
+      expect(() => conv.xPointerToCFI('/body/DocFragment[1].0')).not.toThrow();
+    });
+
+    it('converts /body/DocFragment[N].M with non-zero offset without throwing', () => {
+      const conv = new XCFI(simpleDoc, 0);
+      expect(() => conv.xPointerToCFI('/body/DocFragment[1].42')).not.toThrow();
+    });
+  });
 });

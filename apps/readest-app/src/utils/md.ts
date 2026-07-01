@@ -1,7 +1,6 @@
 import { marked } from 'marked';
 
 import type { BookDoc, SectionItem } from '@/libs/document';
-import { CFI } from '@/libs/document';
 import { sanitizeHtml } from './sanitize';
 
 // Render a standalone Markdown (.md) file into an in-memory foliate-js book at
@@ -159,12 +158,7 @@ export async function makeMarkdownBook(file: File): Promise<BookDoc> {
   const urls: (string | undefined)[] = new Array(xhtml.length).fill(undefined);
   const sections: MarkdownSection[] = xhtml.map((str, index) => ({
     id: String(index),
-    // A per-section spine CFI base. foliate-js builds location CFIs as
-    // `section.cfi ?? CFI.fake.fromIndex(index)`; an empty string defeats that
-    // `??` fallback, so every saved position would collapse to a section-less
-    // CFI and reopening would resume from the start. Set the same fake spine
-    // CFI foliate would synthesize so positions round-trip across reopens.
-    cfi: CFI.fake.fromIndex(index),
+    cfi: '',
     size: new TextEncoder().encode(str).length,
     linear: 'yes',
     load: () => {

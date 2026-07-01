@@ -13,8 +13,8 @@ import {
   serializeOPDSCustomHeaders,
 } from './customHeaders';
 
-const OPDS_PROXY_URL = `${getAPIBaseUrl()}/opds/proxy`;
-const NODE_OPDS_PROXY_URL = `${getNodeAPIBaseUrl()}/opds/proxy`;
+const getOpdsProxyUrl = () => `${getAPIBaseUrl()}/opds/proxy`;
+const getNodeOpdsProxyUrl = () => `${getNodeAPIBaseUrl()}/opds/proxy`;
 /**
  * Extract username and password from URL credentials
  */
@@ -46,17 +46,17 @@ export const needsProxy = (url: string): boolean => {
   return isWebAppPlatform() && url.startsWith('http');
 };
 
-const PROXY_OVERRIDES: Record<string, string> = {
-  standardebooks: NODE_OPDS_PROXY_URL,
+const PROXY_OVERRIDES: Record<string, () => string> = {
+  standardebooks: getNodeOpdsProxyUrl,
 };
 
 const getProxyBaseUrl = (url: string): string => {
-  for (const [domain, proxyUrl] of Object.entries(PROXY_OVERRIDES)) {
+  for (const [domain, getProxyUrl] of Object.entries(PROXY_OVERRIDES)) {
     if (url.includes(domain)) {
-      return proxyUrl;
+      return getProxyUrl();
     }
   }
-  return OPDS_PROXY_URL;
+  return getOpdsProxyUrl();
 };
 
 /**
