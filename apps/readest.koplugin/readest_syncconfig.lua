@@ -97,6 +97,87 @@ function SyncConfig:getDocumentIdentifier(ui)
     return ui.doc_settings:readSetting("partial_md5_checksum")
 end
 
+-- Current UTC time as an ISO-8601 string, the representation used end-to-end:
+-- the DB column is timestamptz and the server accepts ISO via new Date(...).
+-- Keeping every progress timestamp ISO avoids the ms/ISO and number/string
+-- mixing that a per-call epoch would introduce.
+local function nowIso()
+    return os.date("!%Y-%m-%dT%H:%M:%S.000Z")
+end
+
+-- Page number out of a progress value, which may be a "[page,total]" string
+-- (server row) or a {page, total} table (locally built config).
+local function pageFromProgress(progress)
+    if type(progress) == "string" then
+        return tonumber(progress:match("^%[(%d+),%d+%]$"))
+    elseif type(progress) == "table" then
+        return tonumber(progress[1])
+    end
+    return nil
+end
+
+-- Stable signature of the device's CURRENT reading position. Used to tell
+-- whether the position actually changed between pushes. Paged → page number;
+-- reflowable → xpointer.
+function SyncConfig:localPositionSig(ui)
+    if ui.document.info.has_pages then
+        return "p:" .. tostring(ui:getCurrentPage())
+    end
+    return "x:" .. tostring(ui.rolling:getLastProgress())
+end
+
+-- Signature of the position carried by a server config row, in the same shape
+-- as localPositionSig so the two can be compared.
+function SyncConfig:serverPositionSig(ui, config)
+    if ui.document.info.has_pages then
+        return "p:" .. tostring(pageFromProgress(config.progress))
+    end
+    return "x:" .. tostring(config.xpointer)
+end
+
+-- The single watermark (progress_sig, progress_updated_at_value) means: the
+-- position this device is synced to, and when it was authored. It is advanced
+-- on a real local move (push side, author "now") and on adopting a server
+-- position (pull side, inherit the server's authored-at) — mirroring the web
+-- client's lastSyncedProgressTs. The four helpers below are pure so they can be
+-- unit-tested without a live ReaderUI.
+
+-- progressUpdatedAt to report for the current position `sig`: carry the
+-- watermark when unchanged (idempotent re-push / inherited server position),
+-- else this is a real move we author "now".
+function SyncConfig:resolveProgressUpdatedAt(drs, sig, now_value)
+    if drs.progress_sig == sig and drs.progress_updated_at_value then
+        return drs.progress_updated_at_value
+    end
+    drs.progress_sig = sig
+    drs.progress_updated_at_value = now_value
+    return now_value
+end
+
+-- Authored-at of the position we currently hold, or nil when the watermark no
+-- longer matches it (then we have no claim to its freshness).
+function SyncConfig:syncedAuthoredAt(drs, current_sig)
+    if drs.progress_sig == current_sig then
+        return drs.progress_updated_at_value
+    end
+    return nil
+end
+
+-- Is the server's position (authored at server_prog) newer than ours (authored
+-- at my_prog)? No claim of our own → server wins. ISO-8601 UTC strings compare
+-- lexicographically == chronologically.
+function SyncConfig:isServerNewer(my_prog, server_prog)
+    if not my_prog then return true end
+    return server_prog ~= nil and server_prog > my_prog
+end
+
+-- Advance the watermark to a position we now hold (adopted from the server), so
+-- we don't re-adopt it and the next push inherits its authored-at.
+function SyncConfig:setSyncedPosition(drs, sig, authored_at)
+    drs.progress_sig = sig
+    drs.progress_updated_at_value = authored_at
+end
+
 function SyncConfig:getCurrentBookConfig(ui)
     local book_hash = self:getDocumentIdentifier(ui)
     local meta_hash = self:getMetaHash(ui)
@@ -113,7 +194,7 @@ function SyncConfig:getCurrentBookConfig(ui)
         metaHash = meta_hash,
         progress = "",
         xpointer = "",
-        updatedAt = os.time() * 1000,
+        updatedAt = nowIso(),
     }
 
     local current_page = ui:getCurrentPage()
@@ -124,51 +205,69 @@ function SyncConfig:getCurrentBookConfig(ui)
         config.xpointer = ui.rolling:getLastProgress()
     end
 
+    -- Attach an honest progressUpdatedAt so the server's per-field position
+    -- merge can protect a newer remote position from an unmoved device.
+    local drs = ui.doc_settings:readSetting("readest_sync") or {}
+    config.progressUpdatedAt =
+        self:resolveProgressUpdatedAt(drs, self:localPositionSig(ui), config.updatedAt)
+    ui.doc_settings:saveSetting("readest_sync", drs)
+
     return config
 end
 
-function SyncConfig:applyBookConfig(ui, config)
+-- Returns true if position was changed, false if skipped or already identical.
+-- allow_backwards=true: last-write-wins, applies in any direction.
+-- allow_backwards=false (default): forward-only, only advances position.
+-- Callers are responsible for the timestamp-newness check before calling.
+function SyncConfig:applyBookConfig(ui, config, allow_backwards)
     logger.dbg("ReadestSync: Applying book config:", config)
     local xpointer = config.xpointer
     local progress = config.progress
     local has_pages = ui.document.info.has_pages
-    local progress_pattern = "^%[(%d+),(%d+)%]$"
     if has_pages and progress then
-        local page, _total_pages = progress:match(progress_pattern)
+        local new_page
+        if type(progress) == "string" then
+            local page = progress:match("^%[(%d+),%d+%]$")
+            new_page = tonumber(page)
+        elseif type(progress) == "table" then
+            new_page = tonumber(progress[1])
+        end
         local current_page = ui:getCurrentPage()
-        local new_page = tonumber(page)
-        if new_page > current_page then
+        if new_page and new_page ~= current_page
+                and (allow_backwards or new_page > current_page) then
             ui.link:addCurrentLocationToStack()
             ui:handleEvent(Event:new("GotoPage", new_page))
-            self:showSyncedMessage()
+            return true
         end
     end
     if not has_pages and xpointer then
         local last_xpointer = ui.rolling:getLastProgress()
-        local working_xpointer = xpointer
-        local cmp_result = ui.document:compareXPointers(last_xpointer, working_xpointer)
-        while cmp_result == nil and working_xpointer do
-            local last_slash_pos = working_xpointer:match("^.*()/")
-            if last_slash_pos and last_slash_pos > 1 then
-                working_xpointer = working_xpointer:sub(1, last_slash_pos - 1)
-                cmp_result = ui.document:compareXPointers(last_xpointer, working_xpointer)
+        if xpointer ~= last_xpointer then
+            if allow_backwards then
+                ui.link:addCurrentLocationToStack()
+                ui:handleEvent(Event:new("GotoXPointer", xpointer))
+                return true
             else
-                break
+                local cmp_result = ui.document:compareXPointers(last_xpointer, xpointer)
+                local working_xpointer = xpointer
+                while cmp_result == nil and working_xpointer do
+                    local last_slash_pos = working_xpointer:match("^.*()/")
+                    if last_slash_pos and last_slash_pos > 1 then
+                        working_xpointer = working_xpointer:sub(1, last_slash_pos - 1)
+                        cmp_result = ui.document:compareXPointers(last_xpointer, working_xpointer)
+                    else
+                        break
+                    end
+                end
+                if cmp_result and cmp_result > 0 then
+                    ui.link:addCurrentLocationToStack()
+                    ui:handleEvent(Event:new("GotoXPointer", xpointer))
+                    return true
+                end
             end
         end
-        if cmp_result > 0 then
-            ui.link:addCurrentLocationToStack()
-            ui:handleEvent(Event:new("GotoXPointer", working_xpointer))
-            self:showSyncedMessage()
-        end
     end
-end
-
-function SyncConfig:showSyncedMessage()
-    UIManager:show(InfoMessage:new{
-        text = _("Progress has been synchronized."),
-        timeout = 3,
-    })
+    return false
 end
 
 function SyncConfig:push(ui, settings, client, interactive, last_sync_timestamp)
@@ -260,9 +359,10 @@ function SyncConfig:pull(ui, settings, client, book_hash, meta_hash, interactive
                 return
             end
 
+            local doc_readest_sync = ui.doc_settings and
+                ui.doc_settings:readSetting("readest_sync") or {}
+            doc_readest_sync.last_synced_at_config = os.time()
             if ui.doc_settings then
-                local doc_readest_sync = ui.doc_settings:readSetting("readest_sync") or {}
-                doc_readest_sync.last_synced_at_config = os.time()
                 ui.doc_settings:saveSetting("readest_sync", doc_readest_sync)
             end
 
@@ -270,12 +370,47 @@ function SyncConfig:pull(ui, settings, client, book_hash, meta_hash, interactive
             if data and #data > 0 then
                 local config = data[1]
                 if config then
-                    self:applyBookConfig(ui, config)
-                    if interactive then
-                        UIManager:show(InfoMessage:new{
-                            text = _("Reading progress synchronized"),
-                            timeout = 2,
-                        })
+                    -- Position-author timestamps decide newness (mirrors the web's
+                    -- lastSyncedProgressTs): compare the server's progress_updated_at
+                    -- against the authored-at of the position we currently hold. Never
+                    -- keys on updated_at (row-touch), so an unmoved device's push that
+                    -- merely bumped the row can't trigger a needless re-pull.
+                    -- sync_progress_backwards only governs DIRECTION in applyBookConfig.
+                    local server_sig = self:serverPositionSig(ui, config)
+                    local server_prog = config.progress_updated_at or config.updated_at
+                    local my_sig = self:localPositionSig(ui)
+                    local my_prog = self:syncedAuthoredAt(doc_readest_sync, my_sig)
+                    local server_is_newer = self:isServerNewer(my_prog, server_prog)
+                    logger.dbg("ReadestSync pull: server_prog=" .. tostring(server_prog)
+                        .. " my_prog=" .. tostring(my_prog)
+                        .. " sync_progress_backwards=" .. tostring(settings.sync_progress_backwards)
+                        .. " server_is_newer=" .. tostring(server_is_newer))
+                    if server_is_newer then
+                        local navigated = self:applyBookConfig(ui, config, settings.sync_progress_backwards)
+                        -- Advance the watermark to the server's position we now hold
+                        -- (navigated to it, or were already there) so the next pull
+                        -- won't re-adopt it and the next push inherits its authored-at.
+                        if navigated or my_sig == server_sig then
+                            self:setSyncedPosition(doc_readest_sync, server_sig, server_prog)
+                            if ui.doc_settings then
+                                ui.doc_settings:saveSetting("readest_sync", doc_readest_sync)
+                            end
+                        end
+                        if interactive then
+                            UIManager:show(InfoMessage:new{
+                                text = navigated
+                                    and _("Reading progress synchronized")
+                                    or _("Reading progress is already up to date"),
+                                timeout = 2,
+                            })
+                        end
+                    else
+                        if interactive then
+                            UIManager:show(InfoMessage:new{
+                                text = _("Local reading progress is more recent"),
+                                timeout = 2,
+                            })
+                        end
                     end
                     return
                 end

@@ -20,8 +20,9 @@ end
 
 function ReadestSyncClient:init()
     local Spore = require("Spore")
-    self.client = Spore.new_from_spec(self.service_spec)
-    
+    local opts = self.base_url and { base_url = self.base_url } or {}
+    self.client = Spore.new_from_spec(self.service_spec, opts)
+
     -- Readest API headers middleware
     package.loaded["Spore.Middleware.ReadestHeaders"] = {}
     require("Spore.Middleware.ReadestHeaders").call = function(args, req)

@@ -7,6 +7,7 @@ local UIManager = require("ui/uimanager")
 local logger = require("logger")
 local sha2 = require("ffi/sha2")
 local T = require("ffi/util").template
+local util = require("util")
 local _ = require("readest_i18n")
 
 local SyncAuth = require("readest_syncauth")
@@ -22,12 +23,26 @@ local ReadestSync = WidgetContainer:new{
 }
 
 local API_CALL_DEBOUNCE_DELAY = 30
+-- Polling for WiFi after resume: 1s initial delay, 3s between retries, up to 8 retries (~25s total).
+-- runWhenOnline/willRerunWhenOnline only fire when KOReader itself initiated the connection;
+-- OS-level auto-connect on wake is invisible to those hooks, so we poll instead.
+local PULL_ONLINE_POLL_DELAY   = 1
+local PULL_ONLINE_POLL_INTERVAL = 3
+local PULL_ONLINE_POLL_MAX      = 8
 local SUPABAE_ANON_KEY_BASE64 = "ZXlKaGJHY2lPaUpJVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKemRYQmhZbUZ6WlNJc0luSmxaaUk2SW5aaWMzbDRablZ6YW1weFpIaHJhbkZzZVhOaklpd2ljbTlzWlNJNkltRnViMjRpTENKcFlYUWlPakUzTXpReE1qTTJOekVzSW1WNGNDSTZNakEwT1RZNU9UWTNNWDAuM1U1VXFhb3VfMVNnclZlMWVvOXJBcGMwdUtqcWhwUWRVWGh2d1VIbVVmZw=="
 
+local DEFAULT_API_BASE_URL = "https://web.readest.com"
+local DEFAULT_SUPABASE_URL = "https://readest.supabase.co"
+local DEFAULT_SUPABASE_ANON_KEY = sha2.base64_to_bin(SUPABAE_ANON_KEY_BASE64)
+
 ReadestSync.default_settings = {
-    supabase_url = "https://readest.supabase.co",
-    supabase_anon_key = sha2.base64_to_bin(SUPABAE_ANON_KEY_BASE64),
+    server_url = nil,
+    api_base_url = DEFAULT_API_BASE_URL,
+    supabase_url = DEFAULT_SUPABASE_URL,
+    supabase_anon_key = DEFAULT_SUPABASE_ANON_KEY,
     auto_sync = false,
+    pull_on_resume = false,
+    sync_progress_backwards = false,
     user_email = nil,
     user_name = nil,
     user_id = nil,
@@ -43,6 +58,30 @@ ReadestSync.default_settings = {
 function ReadestSync:init()
     self.last_sync_timestamp = 0
     self.settings = G_reader_settings:readSetting("readest_sync", self.default_settings)
+
+    -- Migrate: old api_url (with /api suffix) → api_base_url (no /api suffix).
+    if self.settings.api_url and not self.settings.api_base_url then
+        self.settings.api_base_url = self.settings.api_url:gsub("/api/?$", "")
+        self.settings.api_url = nil
+    end
+    -- Migrate: remote_progress_wins → sync_progress_backwards (clearer name for
+    -- the "let an older remote position move us backwards" toggle).
+    if self.settings.remote_progress_wins ~= nil and self.settings.sync_progress_backwards == nil then
+        self.settings.sync_progress_backwards = self.settings.remote_progress_wins
+        self.settings.remote_progress_wins = nil
+    end
+    -- Back-fill any keys added to default_settings that are absent from the
+    -- stored table (e.g. api_base_url for users upgrading from an older version).
+    local settings_changed = false
+    for k, v in pairs(self.default_settings) do
+        if self.settings[k] == nil then
+            self.settings[k] = v
+            settings_changed = true
+        end
+    end
+    if settings_changed then
+        G_reader_settings:saveSetting("readest_sync", self.settings)
+    end
 
     local meta = dofile(self.path .. "/_meta.lua")
     self.installed_version = meta and meta.version and tostring(meta.version)
@@ -87,15 +126,76 @@ function ReadestSync:onDispatcherRegisterReaderActions()
     Dispatcher:registerAction("readest_sync_pull_annotations", { category="none", event="ReadestSyncPullAnnotations", title=_("Pull readest annotations from other devices"), reader=true, separator=true,})
 end
 
-function ReadestSync:onReaderReady()
-    if self.settings.auto_sync and self.settings.access_token then
-        UIManager:nextTick(function()
+-- Poll for network availability and pull once online. Used by onReaderReady
+-- and onResume where OS-level auto-connect makes runWhenOnline unreliable.
+function ReadestSync:pullWhenOnline()
+    local attempts = 0
+    local function tryPull()
+        if NetworkMgr:isOnline() then
             self:pullBookConfig(false)
             self:pullBookNotes(false)
             self:pullBookStats(false)
-        end)
+        elseif attempts < PULL_ONLINE_POLL_MAX then
+            attempts = attempts + 1
+            UIManager:scheduleIn(PULL_ONLINE_POLL_INTERVAL, tryPull)
+        end
+    end
+    UIManager:scheduleIn(PULL_ONLINE_POLL_DELAY, tryPull)
+end
+
+function ReadestSync:onReaderReady()
+    if self.settings.access_token and (self.settings.auto_sync or self.settings.pull_on_resume) then
+        self._refresh_failed_once = nil
+        self:pullWhenOnline()
     end
     self:onDispatcherRegisterReaderActions()
+end
+
+-- Pull progress + notes + stats. Logged so resume sync issues are diagnosable
+-- via KOReader's crash.log (grep "ReadestSync: pulling").
+function ReadestSync:pullProgressNow()
+    logger.dbg("ReadestSync: pulling progress (resume / network connected)")
+    self:pullBookConfig(false)
+    self:pullBookNotes(false)
+    self:pullBookStats(false)
+end
+
+function ReadestSync:onResume()
+    if self.settings.access_token and self.settings.pull_on_resume then
+        self._refresh_failed_once = nil
+        if NetworkMgr:isOnline() then
+            self:pullProgressNow()
+        elseif NetworkMgr:isConnected() then
+            -- isConnected() (ifHasAnAddress) is true: interface is up and has
+            -- an IP, but isOnline() (canResolveHostnames) hasn't settled yet.
+            -- Poll until DNS is ready; no need for the connect flow below.
+            self:pullWhenOnline()
+        else
+            -- WiFi is off. Set a flag so onNetworkConnected triggers the pull
+            -- for any connection event — whether initiated by runWhenOnline or
+            -- by KOReader's own WiFi restore on wake. runWhenOnline actively
+            -- requests the connection per wifi_enable_action (turns WiFi on,
+            -- or prompts the user). The empty callback is intentional: the
+            -- actual pull is driven by onNetworkConnected, not this callback,
+            -- because reconnectOrShowNetworkMenu (the Kindle lipc path) may
+            -- fail its initial scan and drop the callback silently, while
+            -- NetworkConnected is still broadcast by connectivityCheck when
+            -- the connection eventually succeeds.
+            self._pull_on_connect = true
+            NetworkMgr:runWhenOnline(function() end)
+        end
+    end
+end
+
+function ReadestSync:onNetworkConnected()
+    if self._pull_on_connect then
+        self._pull_on_connect = false
+        -- Use pullWhenOnline() rather than pullProgressNow() so we wait for
+        -- isOnline() (DNS) to settle after NetworkConnected fires. The
+        -- original code called pullProgressNow() directly here, which raced
+        -- against canResolveHostnames() not yet returning true.
+        self:pullWhenOnline()
+    end
 end
 
 -- Reverse-lookup table: file extension (lowercase) → Readest format
@@ -154,8 +254,7 @@ end
 -- the file directly, since long-pressing in FileManager doesn't go
 -- through the Library row path.
 function ReadestSync:addToReadest(file)
-    local lfs    = require("libs/libkoreader-lfs")
-    local util   = require("util")
+    local lfs = require("libs/libkoreader-lfs")
 
     if not self.settings.access_token then
         UIManager:show(InfoMessage:new{
@@ -298,6 +397,13 @@ function ReadestSync:addToMainMenu(menu_items)
         text = _("Readest"),
         sub_item_table = {
             {
+                text = _("Server settings"),
+                callback = function()
+                    self:showServerSettings()
+                end,
+                separator = true,
+            },
+            {
                 text_func = function()
                     return SyncAuth:needsLogin(self.settings) and _("Log in Readest Account")
                         or T(_("Log out as %1"), self.settings.user_name or "")
@@ -319,6 +425,22 @@ function ReadestSync:addToMainMenu(menu_items)
                 checked_func = function() return self.settings.auto_sync end,
                 callback = function()
                     self:onReadestSyncToggleAutoSync()
+                end,
+            },
+            {
+                text = _("Pull on resume"),
+                checked_func = function() return self.settings.pull_on_resume end,
+                callback = function()
+                    self.settings.pull_on_resume = not self.settings.pull_on_resume
+                    G_reader_settings:saveSetting("readest_sync", self.settings)
+                end,
+            },
+            {
+                text = _("Allow reading progress to sync backwards"),
+                checked_func = function() return self.settings.sync_progress_backwards end,
+                callback = function()
+                    self.settings.sync_progress_backwards = not self.settings.sync_progress_backwards
+                    G_reader_settings:saveSetting("readest_sync", self.settings)
                 end,
                 separator = true,
             },
@@ -442,7 +564,14 @@ end
 
 -- ── Sync helpers (thin wrappers around modules) ────────────────────
 
-function ReadestSync:ensureClient(interactive)
+-- Resolve an authenticated sync client, refreshing the token first if it is
+-- near or past expiry, then invoke `callback(client)` (or callback(nil) when
+-- unavailable). Async because the refresh is async: building the client
+-- synchronously after kicking off a refresh would send a stale/expired Bearer
+-- token (sync then silently no-ops after a long sleep — the token is expired,
+-- getReadestSyncClient returns nil, and the just-started refresh lands too
+-- late for this call). Routing through withFreshToken awaits the new token.
+function ReadestSync:ensureClient(interactive, callback)
     if not self.settings.access_token or not self.settings.user_id then
         if interactive then
             UIManager:show(InfoMessage:new{
@@ -450,22 +579,39 @@ function ReadestSync:ensureClient(interactive)
                 timeout = 2,
             })
         end
-        return nil
+        callback(nil)
+        return
     end
 
-    SyncAuth:tryRefreshToken(self.settings, self.path)
-
-    local client = SyncAuth:getReadestSyncClient(self.settings, self.path)
-    if not client then
-        if interactive then
-            UIManager:show(InfoMessage:new{
-                text = _("Please configure Readest settings first"),
-                timeout = 3,
-            })
+    SyncAuth:withFreshToken(self.settings, self.path, function(ok, err)
+        if not ok then
+            logger.dbg("ReadestSync: token refresh failed, skipping sync:", err)
+            -- On a network-error refresh failure (WiFi not yet stable), retry
+            -- once via pullWhenOnline so the next poll gets a fresh attempt.
+            -- _refresh_failed_once guards against a second retry (revoked token
+            -- or persistent network failure) and is reset on each new pull cycle.
+            if not interactive and not self._refresh_failed_once then
+                self._refresh_failed_once = true
+                self:pullWhenOnline()
+            end
+            callback(nil)
+            return
         end
-        return nil
-    end
-    return client
+        self._refresh_failed_once = false
+
+        local client = SyncAuth:getReadestSyncClient(self.settings, self.path)
+        if not client then
+            if interactive then
+                UIManager:show(InfoMessage:new{
+                    text = _("Please configure Readest settings first"),
+                    timeout = 3,
+                })
+            end
+            callback(nil)
+            return
+        end
+        callback(client)
+    end)
 end
 
 function ReadestSync:getBookIdentifiers()
@@ -518,9 +664,12 @@ end
 
 -- ── Config sync ────────────────────────────────────────────────────
 
-function ReadestSync:pushBookConfig(interactive)
+-- force=true bypasses the inter-push debounce. Used on document close so the
+-- final reading position always reaches the server, even if a page-turn push
+-- fired less than API_CALL_DEBOUNCE_DELAY seconds earlier.
+function ReadestSync:pushBookConfig(interactive, force)
     local now = os.time()
-    if not interactive and now - self.last_sync_timestamp <= API_CALL_DEBOUNCE_DELAY then
+    if not interactive and not force and now - self.last_sync_timestamp <= API_CALL_DEBOUNCE_DELAY then
         return
     end
 
@@ -528,12 +677,12 @@ function ReadestSync:pushBookConfig(interactive)
         return
     end
 
-    local client = self:ensureClient(interactive)
-    if not client then return end
-
-    self.last_sync_timestamp = SyncConfig:push(
-        self.ui, self.settings, client, interactive, self.last_sync_timestamp
-    )
+    self:ensureClient(interactive, function(client)
+        if not client then return end
+        self.last_sync_timestamp = SyncConfig:push(
+            self.ui, self.settings, client, interactive, self.last_sync_timestamp
+        )
+    end)
 end
 
 function ReadestSync:pullBookConfig(interactive)
@@ -544,13 +693,16 @@ function ReadestSync:pullBookConfig(interactive)
         return
     end
 
-    local client = self:ensureClient(interactive)
-    if not client then return end
-
-    SyncConfig:pull(
-        self.ui, self.settings, client, book_hash, meta_hash, interactive,
-        function() SyncAuth:logout(self.settings, self.path) end
-    )
+    self:ensureClient(interactive, function(client)
+        if not client then return end
+        SyncConfig:pull(
+            self.ui, self.settings, client, book_hash, meta_hash, interactive,
+            -- Only an explicit user-initiated pull may clear the session on
+            -- 401/403; a background auto-sync hitting a transient auth error
+            -- must not silently log the user out.
+            interactive and function() SyncAuth:logout(self.settings, self.path) end or nil
+        )
+    end)
 end
 
 -- ── Reading statistics sync ────────────────────────────────────────
@@ -560,12 +712,13 @@ function ReadestSync:pushBookStats(interactive)
     if interactive and NetworkMgr:willRerunWhenOnline(function() self:pushBookStats(interactive) end) then
         return
     end
-    local client = self:ensureClient(interactive)
-    if not client then
-        logger.dbg("ReadestStats pushBookStats: no client (not signed in / offline); skipping")
-        return
-    end
-    SyncStats:push(self.settings, client, interactive)
+    self:ensureClient(interactive, function(client)
+        if not client then
+            logger.dbg("ReadestStats pushBookStats: no client (not signed in / offline); skipping")
+            return
+        end
+        SyncStats:push(self.settings, client, interactive)
+    end)
 end
 
 function ReadestSync:pullBookStats(interactive)
@@ -573,13 +726,15 @@ function ReadestSync:pullBookStats(interactive)
     if NetworkMgr:willRerunWhenOnline(function() self:pullBookStats(interactive) end) then
         return
     end
-    local client = self:ensureClient(interactive)
-    if not client then
-        logger.dbg("ReadestStats pullBookStats: no client (not signed in / offline); skipping")
-        return
-    end
-    SyncStats:pull(self.settings, client, interactive,
-        function() SyncAuth:logout(self.settings, self.path) end)
+    self:ensureClient(interactive, function(client)
+        if not client then
+            logger.dbg("ReadestStats pullBookStats: no client (not signed in / offline); skipping")
+            return
+        end
+        SyncStats:pull(self.settings, client, interactive,
+            -- Interactive-only logout: see pullBookConfig.
+            interactive and function() SyncAuth:logout(self.settings, self.path) end or nil)
+    end)
 end
 
 -- ── Annotation sync ────────────────────────────────────────────────
@@ -589,10 +744,10 @@ function ReadestSync:pushBookNotes(interactive, full_sync)
         return
     end
 
-    local client = self:ensureClient(interactive)
-    if not client then return end
-
-    SyncAnnotations:push(self.ui, self.settings, client, interactive, full_sync)
+    self:ensureClient(interactive, function(client)
+        if not client then return end
+        SyncAnnotations:push(self.ui, self.settings, client, interactive, full_sync)
+    end)
 end
 
 function ReadestSync:pullBookNotes(interactive, full_sync)
@@ -603,12 +758,12 @@ function ReadestSync:pullBookNotes(interactive, full_sync)
         return
     end
 
-    local client = self:ensureClient(interactive)
-    if not client then return end
-
-    SyncAnnotations:pull(
-        self.ui, self.settings, client, book_hash, meta_hash, self.dialog, interactive, full_sync
-    )
+    self:ensureClient(interactive, function(client)
+        if not client then return end
+        SyncAnnotations:pull(
+            self.ui, self.settings, client, book_hash, meta_hash, self.dialog, interactive, full_sync
+        )
+    end)
 end
 
 function ReadestSync:fullSyncBookNotes()
@@ -769,7 +924,7 @@ end
 function ReadestSync:onCloseDocument()
     if self.settings.auto_sync and self.settings.access_token then
         NetworkMgr:goOnlineToRun(function()
-            self:pushBookConfig(false)
+            self:pushBookConfig(false, true)
             self:pushBookNotes(false)
             self:pushBookStats(false)
             self:syncBooksLibrary("both", false)
@@ -818,6 +973,201 @@ function ReadestSync:onCloseWidget()
         UIManager:unschedule(self.delayed_push_task)
         self.delayed_push_task = nil
     end
+end
+
+function ReadestSync:showServerSettings()
+    local InputDialog = require("ui/widget/inputdialog")
+    local MultiInputDialog = require("ui/widget/multiinputdialog")
+    local socketutil = require("socketutil")
+
+    -- ── Manual entry: all fields at once ──────────────────────────
+    local function showManualDialog()
+        local manual_dialog
+        manual_dialog = MultiInputDialog:new{
+            title = _("Server settings"),
+            fields = {
+                {
+                    text = self.settings.api_base_url or DEFAULT_API_BASE_URL,
+                    hint = _("API Base URL"),
+                },
+                {
+                    text = self.settings.supabase_url or DEFAULT_SUPABASE_URL,
+                    hint = _("Auth URL"),
+                },
+                {
+                    text = self.settings.supabase_anon_key or DEFAULT_SUPABASE_ANON_KEY,
+                    hint = _("Supabase ANON Key"),
+                },
+            },
+            buttons = {
+                {
+                    {
+                        text = _("Cancel"),
+                        id = "close",
+                        callback = function()
+                            UIManager:close(manual_dialog)
+                        end,
+                    },
+                    {
+                        text = _("Reset"),
+                        callback = function()
+                            UIManager:close(manual_dialog)
+                            self.settings.api_base_url = DEFAULT_API_BASE_URL
+                            self.settings.supabase_url = DEFAULT_SUPABASE_URL
+                            self.settings.supabase_anon_key = DEFAULT_SUPABASE_ANON_KEY
+                            G_reader_settings:saveSetting("readest_sync", self.settings)
+                            UIManager:show(InfoMessage:new{
+                                text = _("Server settings reset to defaults"),
+                                timeout = 2,
+                            })
+                        end,
+                    },
+                    {
+                        text = _("Save"),
+                        is_enter_default = true,
+                        callback = function()
+                            local vals = manual_dialog:getFields()
+                            local api = util.trim(vals[1] or "")
+                            local auth = util.trim(vals[2] or "")
+                            local key = util.trim(vals[3] or "")
+                            self.settings.api_base_url = api ~= "" and api or DEFAULT_API_BASE_URL
+                            self.settings.supabase_url = auth ~= "" and auth or DEFAULT_SUPABASE_URL
+                            self.settings.supabase_anon_key = key ~= "" and key or DEFAULT_SUPABASE_ANON_KEY
+                            UIManager:close(manual_dialog)
+                            G_reader_settings:saveSetting("readest_sync", self.settings)
+                            UIManager:show(InfoMessage:new{
+                                text = _("Server settings saved"),
+                                timeout = 2,
+                            })
+                        end,
+                    },
+                },
+            },
+        }
+        UIManager:show(manual_dialog)
+        manual_dialog:onShowKeyboard()
+    end
+
+    -- ── Auto-discover from .well-known ─────────────────────────────
+    local function discoverConfig(server_url)
+        server_url = server_url:gsub("/+$", "")
+
+        local ok_http, http = pcall(require, "socket.http")
+        local ok_ltn12, ltn12 = pcall(require, "ltn12")
+        local ok_json, json = pcall(require, "json")
+        if not (ok_http and ok_ltn12 and ok_json) then
+            return nil, _("HTTP library unavailable")
+        end
+
+        if server_url:match("^https://") then
+            local ok_ssl, ssl_https = pcall(require, "ssl.https")
+            if ok_ssl then http = ssl_https end
+        end
+
+        local DISCOVER_PATHS = {
+            "/.well-known/readest-client-config.json",
+            "/api/public/runtime-config",
+        }
+
+        socketutil:set_timeout(5, 10)
+        local config, last_err
+        for _, path in ipairs(DISCOVER_PATHS) do
+            local body = {}
+            local res, code = http.request{
+                url     = server_url .. path,
+                sink    = ltn12.sink.table(body),
+                headers = { ["Accept"] = "application/json" },
+            }
+            if res and code == 200 then
+                local ok2, parsed = pcall(json.decode, table.concat(body))
+                if ok2 and type(parsed) == "table" then
+                    config = parsed
+                    break
+                end
+            else
+                last_err = code
+            end
+        end
+        socketutil:reset_timeout()
+
+        if config then
+            return config
+        end
+        return nil, T(_("Server unreachable (HTTP %1)"), tostring(last_err or "?"))
+    end
+
+    -- ── Entry dialog: server URL with Discover / Manual ────────────
+    local ConfirmBox = require("ui/widget/confirmbox")
+    local entry_dialog
+    entry_dialog = InputDialog:new{
+        title = _("Server URL"),
+        input = self.settings.server_url or "",
+        input_hint = "https://readest.example.com",
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id = "close",
+                    callback = function()
+                        UIManager:close(entry_dialog)
+                    end,
+                },
+                {
+                    text = _("Manual"),
+                    callback = function()
+                        UIManager:close(entry_dialog)
+                        showManualDialog()
+                    end,
+                },
+                {
+                    text = _("Discover"),
+                    is_enter_default = true,
+                    callback = function()
+                        local server_url = util.trim(entry_dialog:getInputText())
+                        UIManager:close(entry_dialog)
+                        if server_url == "" then
+                            showManualDialog()
+                            return
+                        end
+                        self.settings.server_url = server_url
+                        UIManager:show(InfoMessage:new{
+                            text = _("Discovering server configuration…"),
+                            timeout = 1,
+                        })
+                        local config, err = discoverConfig(server_url)
+                        if config then
+                            if config.apiBaseUrl then
+                                self.settings.api_base_url = config.apiBaseUrl
+                            end
+                            if config.supabaseUrl then
+                                self.settings.supabase_url = config.supabaseUrl
+                            end
+                            if config.supabaseAnonKey then
+                                self.settings.supabase_anon_key = config.supabaseAnonKey
+                            end
+                            G_reader_settings:saveSetting("readest_sync", self.settings)
+                            UIManager:show(InfoMessage:new{
+                                text = _("Server configuration discovered and saved"),
+                                timeout = 3,
+                            })
+                        else
+                            local ConfirmBox = require("ui/widget/confirmbox")
+                            UIManager:show(ConfirmBox:new{
+                                text = T(_("Discovery failed: %1\n\nEnter server URLs manually?"), err or ""),
+                                ok_text = _("Manual"),
+                                cancel_text = _("Cancel"),
+                                ok_callback = function()
+                                    showManualDialog()
+                                end,
+                            })
+                        end
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(entry_dialog)
+    entry_dialog:onShowKeyboard()
 end
 
 function ReadestSync:deletePluginSettings()

@@ -22,8 +22,9 @@ end
 
 function SupabaseAuthClient:init()
     local Spore = require("Spore")
-    self.client = Spore.new_from_spec(self.service_spec)
-    
+    local opts = self.base_url and { base_url = self.base_url } or {}
+    self.client = Spore.new_from_spec(self.service_spec, opts)
+
     -- Supabase API headers middleware
     package.loaded["Spore.Middleware.SupabaseHeaders"] = {}
     require("Spore.Middleware.SupabaseHeaders").call = function(args, req)

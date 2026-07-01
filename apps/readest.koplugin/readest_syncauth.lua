@@ -11,37 +11,39 @@ local _ = require("readest_i18n")
 local SyncAuth = {}
 
 function SyncAuth:needsLogin(settings)
-    return not settings.access_token or not settings.expires_at
-        or settings.expires_at < os.time() + 60
+    if settings.access_token and settings.expires_at
+            and settings.expires_at >= os.time() + 60 then
+        return false
+    end
+    return not settings.refresh_token
 end
 
-function SyncAuth:tryRefreshToken(settings, path)
-    if settings.refresh_token and settings.expires_at
-        and settings.expires_at < os.time() + settings.expires_in / 2 then
-        local client = self:getSupabaseAuthClient(settings, path)
-        client:refresh_token(settings.refresh_token, function(success, response)
-            if success then
-                settings.access_token = response.access_token
-                settings.refresh_token = response.refresh_token
-                settings.expires_at = response.expires_at
-                settings.expires_in = response.expires_in
-                G_reader_settings:saveSetting("readest_sync", settings)
-            else
-                logger.err("ReadestSync: Token refresh failed:", response or "Unknown error")
-            end
-        end)
+-- Drain the queue of callers awaiting the in-flight refresh, handing each
+-- the same (ok, err) result. Cleared before invoking so a callback that
+-- itself triggers another refresh starts a fresh queue.
+function SyncAuth:_drainRefreshWaiters(ok, err)
+    local waiters = self._refresh_waiters or {}
+    self._refresh_waiters = {}
+    self._refreshing = false
+    for _, cb in ipairs(waiters) do
+        cb(ok, err)
     end
 end
 
--- Block-style wrapper around tryRefreshToken: runs the refresh (if needed)
--- and invokes `callback(ok, err)` after the new token is committed to
--- settings, OR immediately with ok=true if the token is still fresh.
+-- Ensure a usable access token, then invoke `callback(ok, err)`:
+--   • Token still has > 50% TTL  → callback(true) immediately.
+--   • Otherwise                  → refresh, then callback after the new
+--                                  token is committed to settings.
 --
--- Codex round 1 finding 14: ensureClient() in main.lua kicks off a refresh
--- and immediately builds a Spore client with whatever token was already in
--- settings — racy. New library API calls (pullBooks, getDownloadUrl) MUST go
--- through this wrapper so the request body never carries a stale Bearer
--- header.
+-- All sync entry points MUST go through this wrapper so requests never
+-- carry a stale Bearer header (the old fire-and-forget tryRefreshToken
+-- built the client before the refresh landed — codex round 1 finding 14).
+--
+-- Single-flight: concurrent callers (config + notes + stats all fire on
+-- resume) share ONE refresh request and are fanned out together. Without
+-- this, N simultaneous refresh_token calls race Supabase's refresh-token
+-- rotation — the first rotates the token and the rest present a revoked
+-- one, which can revoke the whole token family and force a manual re-login.
 function SyncAuth:withFreshToken(settings, path, callback)
     -- Token still has > 50% TTL remaining: nothing to do.
     if not settings.refresh_token or not settings.expires_at
@@ -50,12 +52,18 @@ function SyncAuth:withFreshToken(settings, path, callback)
         return
     end
 
+    -- Join the in-flight refresh (if any) rather than starting another.
+    self._refresh_waiters = self._refresh_waiters or {}
+    if callback then table.insert(self._refresh_waiters, callback) end
+    if self._refreshing then return end
+
     local client = self:getSupabaseAuthClient(settings, path)
     if not client then
-        if callback then callback(false, "no auth client") end
+        self:_drainRefreshWaiters(false, "no auth client")
         return
     end
 
+    self._refreshing = true
     client:refresh_token(settings.refresh_token, function(success, response)
         if success then
             settings.access_token  = response.access_token
@@ -63,10 +71,10 @@ function SyncAuth:withFreshToken(settings, path, callback)
             settings.expires_at    = response.expires_at
             settings.expires_in    = response.expires_in
             G_reader_settings:saveSetting("readest_sync", settings)
-            if callback then callback(true) end
+            self:_drainRefreshWaiters(true)
         else
             logger.err("ReadestSync: Token refresh failed:", response or "Unknown error")
-            if callback then callback(false, response and response.msg or "refresh failed") end
+            self:_drainRefreshWaiters(false, response and response.msg or "refresh failed")
         end
     end)
 end
@@ -79,7 +87,7 @@ function SyncAuth:getSupabaseAuthClient(settings, path)
     local SupabaseAuthClient = require("readest_supabaseauth")
     return SupabaseAuthClient:new{
         service_spec = path .. "/supabase-auth-api.json",
-        custom_url = settings.supabase_url .. "/auth/v1/",
+        base_url = settings.supabase_url .. "/auth/v1/",
         api_key = settings.supabase_anon_key,
     }
 end
@@ -92,6 +100,7 @@ function SyncAuth:getReadestSyncClient(settings, path)
     local ReadestSyncClient = require("readest_syncclient")
     return ReadestSyncClient:new{
         service_spec = path .. "/readest-sync-api.json",
+        base_url = (settings.api_base_url or ""):gsub("/+$", "") .. "/api",
         access_token = settings.access_token,
     }
 end
