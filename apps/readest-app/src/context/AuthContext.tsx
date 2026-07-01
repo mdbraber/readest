@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { User } from '@supabase/supabase-js';
 import { supabase } from '@/utils/supabase';
+import { clearStoredAuthSession } from '@/helpers/auth';
 import posthog from 'posthog-js';
 
 interface AuthContextType {
@@ -52,9 +53,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setToken(access_token);
         setUser(user);
       } else {
-        localStorage.removeItem('token');
-        localStorage.removeItem('refresh_token');
-        localStorage.removeItem('user');
+        clearStoredAuthSession();
         setToken(null);
         setUser(null);
       }
@@ -97,8 +96,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     } catch {
     } finally {
       await supabase.auth.signOut();
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
+      clearStoredAuthSession();
       setToken(null);
       setUser(null);
     }

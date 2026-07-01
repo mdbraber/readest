@@ -1,5 +1,5 @@
 import { User } from '@supabase/supabase-js';
-import { supabase } from '@/utils/supabase';
+import { resetSupabaseClientCache, supabase } from '@/utils/supabase';
 
 interface UseAuthCallbackOptions {
   accessToken?: string | null;
@@ -12,6 +12,34 @@ interface UseAuthCallbackOptions {
   errorCode?: string | null;
   errorDescription?: string | null;
 }
+
+const APP_AUTH_STORAGE_KEYS = ['token', 'refresh_token', 'user', 'lastRedirectAt'] as const;
+const SUPABASE_AUTH_STORAGE_KEY_PATTERN = /^sb-.+-auth-token$/;
+
+export const clearStoredAuthSession = () => {
+  if (typeof window === 'undefined') return;
+
+  for (const key of APP_AUTH_STORAGE_KEYS) {
+    localStorage.removeItem(key);
+  }
+
+  for (const key of Object.keys(localStorage)) {
+    if (SUPABASE_AUTH_STORAGE_KEY_PATTERN.test(key)) {
+      localStorage.removeItem(key);
+    }
+  }
+};
+
+export const clearAuthSessionForServerChange = async () => {
+  try {
+    await supabase.auth.signOut();
+  } catch {
+    // Best-effort: local auth state still must be cleared when changing servers.
+  } finally {
+    clearStoredAuthSession();
+    resetSupabaseClientCache();
+  }
+};
 
 export function handleAuthCallback({
   accessToken,

@@ -14,6 +14,7 @@ import {
   READEST_UPDATER_FILE,
   READEST_NIGHTLY_UPDATER_FILE,
 } from '@/services/constants';
+import { getAndroidUpdatePlatform } from '@/helpers/androidUpdatePlatform';
 
 const LAST_CHECK_KEY = 'lastAppUpdateCheck';
 
@@ -159,7 +160,7 @@ export const checkForAppUpdates = async (
     if (!platformKey) return false;
     const resolved = await resolveNightlyUpdate(getAppVersion(), platformKey, fetch);
     if (resolved) {
-      setUpdaterWindowVisible(true, resolved.version, getAppVersion(), true, resolved);
+      setUpdaterWindowVisible(true, resolved.version, getAppVersion(), true);
       return true;
     }
     return false;
@@ -180,10 +181,11 @@ export const checkForAppUpdates = async (
       const response = await fetch(READEST_UPDATER_FILE, { connectTimeout: 5000 });
       const data = await response.json();
       const isNewer = semver.gt(data.version, getAppVersion());
-      if (isNewer && ('android-arm64' in data.platforms || 'android-universal' in data.platforms)) {
+      const platform = getAndroidUpdatePlatform(osArch(), data.platforms);
+      if (isNewer && platform) {
         setUpdaterWindowVisible(true, data.version!, getAppVersion());
       }
-      return isNewer;
+      return isNewer && !!platform;
     } catch (err) {
       console.warn('Failed to fetch Android update info', err);
       throw new Error('Failed to fetch Android update info');

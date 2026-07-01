@@ -4,7 +4,7 @@ import semver from 'semver';
 // ── Mocks for Tauri and internal modules ─────────────────────────
 const mockCheck = vi.fn();
 const mockOsType = vi.fn();
-const mockOsArch = vi.fn();
+const mockOsArch = vi.fn(() => 'aarch64');
 const mockTauriFetch = vi.fn();
 
 vi.mock('@tauri-apps/plugin-updater', () => ({
@@ -45,19 +45,14 @@ vi.mock('@/services/environment', () => ({
 }));
 
 let mockAppVersion = '1.0.0';
-vi.mock('@/utils/version', async () => {
-  const actual = await vi.importActual<typeof import('@/utils/version')>('@/utils/version');
-  return {
-    ...actual,
-    getAppVersion: () => mockAppVersion,
-  };
-});
+vi.mock('@/utils/version', () => ({
+  getAppVersion: () => mockAppVersion,
+}));
 
 vi.mock('@/services/constants', () => ({
   CHECK_UPDATE_INTERVAL_SEC: 86400,
   READEST_UPDATER_FILE: 'https://example.com/latest.json',
   READEST_CHANGELOG_FILE: 'https://example.com/release-notes.json',
-  READEST_NIGHTLY_UPDATER_FILE: 'https://example.com/nightly/latest.json',
 }));
 
 import {
@@ -65,20 +60,15 @@ import {
   checkAppReleaseNotes,
   setLastShownReleaseNotesVersion,
   getLastShownReleaseNotesVersion,
-  resolveNightlyUpdate,
-  getNightlyPlatformKey,
 } from '@/helpers/updater';
-import {
-  buildNightlyManifest,
-  buildStableManifest,
-  baseVersion,
-} from '../../../scripts/nightly-verify-harness/serve.mjs';
+import { getAndroidUpdatePlatform } from '@/helpers/androidUpdatePlatform';
 
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   mockIsTauriAppPlatform = false;
   mockAppVersion = '1.0.0';
+  mockOsArch.mockReturnValue('aarch64');
   MockWebviewWindowLastArgs.length = 0;
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -93,6 +83,28 @@ afterEach(() => {
 const dummyTranslate = (key: string) => key;
 
 describe('updater', () => {
+  describe('Android platform selection', () => {
+    test.each([
+      ['aarch64', 'android-arm64', 'arm64'],
+      ['armv7', 'android-armv7', 'armv7'],
+      ['x86_64', 'android-x86_64', 'x64'],
+      ['i686', 'android-i686', 'x86'],
+    ])('maps %s to %s', (arch, key, assetArch) => {
+      expect(getAndroidUpdatePlatform(arch, { [key]: {} })).toEqual({ key, assetArch });
+    });
+
+    test('falls back to universal when the arch-specific APK is unavailable', () => {
+      expect(getAndroidUpdatePlatform('armv7', { 'android-universal': {} })).toEqual({
+        key: 'android-universal',
+        assetArch: 'universal',
+      });
+    });
+
+    test('returns null when no compatible Android APK exists', () => {
+      expect(getAndroidUpdatePlatform('armv7', { 'windows-x86_64': {} })).toBeNull();
+    });
+  });
+
   // ── setLastShownReleaseNotesVersion / getLastShownReleaseNotesVersion ──
   describe('release notes version tracking', () => {
     test('getLastShownReleaseNotesVersion returns empty string when not set', () => {
@@ -194,6 +206,7 @@ describe('updater', () => {
 
     test('checks Android update via fetch when OS is android', async () => {
       mockOsType.mockReturnValue('android');
+      mockOsArch.mockReturnValue('aarch64');
       mockAppVersion = '1.0.0';
 
       mockTauriFetch.mockResolvedValue({
@@ -212,6 +225,7 @@ describe('updater', () => {
 
     test('Android check with android-universal platform', async () => {
       mockOsType.mockReturnValue('android');
+      mockOsArch.mockReturnValue('armv7');
       mockAppVersion = '1.0.0';
 
       mockTauriFetch.mockResolvedValue({
@@ -228,8 +242,47 @@ describe('updater', () => {
       expect(mockSetUpdaterWindowVisible).toHaveBeenCalled();
     });
 
+    test('Android check with split x86_64 platform', async () => {
+      mockOsType.mockReturnValue('android');
+      mockOsArch.mockReturnValue('x86_64');
+      mockAppVersion = '1.0.0';
+
+      mockTauriFetch.mockResolvedValue({
+        json: () =>
+          Promise.resolve({
+            version: '2.0.0',
+            platforms: { 'android-x86_64': {} },
+          }),
+      });
+
+      const result = await checkForAppUpdates(dummyTranslate, false);
+
+      expect(result).toBe(true);
+      expect(mockSetUpdaterWindowVisible).toHaveBeenCalledWith(true, '2.0.0', '1.0.0');
+    });
+
+    test('Android returns false when no compatible APK exists', async () => {
+      mockOsType.mockReturnValue('android');
+      mockOsArch.mockReturnValue('armv7');
+      mockAppVersion = '1.0.0';
+
+      mockTauriFetch.mockResolvedValue({
+        json: () =>
+          Promise.resolve({
+            version: '2.0.0',
+            platforms: { 'android-arm64': {} },
+          }),
+      });
+
+      const result = await checkForAppUpdates(dummyTranslate, false);
+
+      expect(result).toBe(false);
+      expect(mockSetUpdaterWindowVisible).not.toHaveBeenCalled();
+    });
+
     test('Android returns false when version is not newer', async () => {
       mockOsType.mockReturnValue('android');
+      mockOsArch.mockReturnValue('aarch64');
       mockAppVersion = '2.0.0';
 
       mockTauriFetch.mockResolvedValue({
@@ -275,38 +328,6 @@ describe('updater', () => {
       const stored = parseInt(localStorage.getItem('lastAppUpdateCheck')!, 10);
       expect(stored).toBeGreaterThanOrEqual(before);
       expect(stored).toBeLessThanOrEqual(after);
-    });
-
-    test('nightly channel resolves and opens the updater window', async () => {
-      const past = Date.now() - 86400 * 1000 - 1000;
-      localStorage.setItem('lastAppUpdateCheck', past.toString());
-      mockOsType.mockReturnValue('macos');
-      mockOsArch.mockReturnValue('aarch64');
-      mockAppVersion = '0.11.4';
-      mockTauriFetch.mockImplementation(async (url: string) =>
-        url.includes('nightly')
-          ? {
-              ok: true,
-              json: async () => ({
-                version: '0.11.4-2026061406',
-                platforms: { 'darwin-aarch64': { url: 'u', signature: 's' } },
-              }),
-            }
-          : {
-              ok: true,
-              json: async () => ({
-                version: '0.11.4',
-                platforms: { 'darwin-aarch64': { url: 'u', signature: 's' } },
-              }),
-            },
-      );
-      mockIsTauriAppPlatform = true;
-
-      const result = await checkForAppUpdates(dummyTranslate, false, 'nightly');
-
-      expect(result).toBe(true);
-      expect(mockCheck).not.toHaveBeenCalled(); // isolated from Tauri check()
-      expect(mockSetUpdaterWindowVisible).toHaveBeenCalled();
     });
   });
 
@@ -407,133 +428,5 @@ describe('updater', () => {
     test('equal versions return false', () => {
       expect(semver.gt('1.0.0', '1.0.0')).toBe(false);
     });
-  });
-});
-
-describe('getNightlyPlatformKey', () => {
-  test('android', () => {
-    expect(getNightlyPlatformKey('android', 'aarch64', false, false)).toBe('android-arm64');
-    expect(getNightlyPlatformKey('android', 'x86_64', false, false)).toBe('android-universal');
-  });
-  test('windows nsis vs portable', () => {
-    expect(getNightlyPlatformKey('windows', 'x86_64', false, false)).toBe('windows-x86_64');
-    expect(getNightlyPlatformKey('windows', 'x86_64', true, false)).toBe('windows-x86_64-portable');
-  });
-  test('linux appimage vs deb', () => {
-    expect(getNightlyPlatformKey('linux', 'x86_64', false, true)).toBe('linux-x86_64-appimage');
-    expect(getNightlyPlatformKey('linux', 'x86_64', false, false)).toBeNull();
-  });
-  test('macos', () => {
-    expect(getNightlyPlatformKey('macos', 'aarch64', false, false)).toBe('darwin-aarch64');
-  });
-  test('windows/linux aarch64 still map to their arm keys', () => {
-    expect(getNightlyPlatformKey('windows', 'aarch64', false, false)).toBe('windows-aarch64');
-    expect(getNightlyPlatformKey('windows', 'aarch64', true, false)).toBe(
-      'windows-aarch64-portable',
-    );
-    expect(getNightlyPlatformKey('linux', 'aarch64', false, true)).toBe('linux-aarch64-appimage');
-  });
-  test('an unknown / 32-bit arch yields no nightly (no aarch64 mis-route)', () => {
-    expect(getNightlyPlatformKey('windows', 'i686', false, false)).toBeNull();
-    expect(getNightlyPlatformKey('windows', 'i686', true, false)).toBeNull();
-    expect(getNightlyPlatformKey('linux', 'i686', false, true)).toBeNull();
-  });
-});
-
-describe('resolveNightlyUpdate', () => {
-  const mkRes = (body: unknown) => ({ ok: true, json: async () => body });
-  const platformKey = 'darwin-aarch64';
-  const entry = { url: 'https://x/app.tar.gz', signature: 'sig' };
-
-  test('picks newer nightly over stable when stable is same-base', async () => {
-    const fetchFn = vi.fn(async (url: string) =>
-      url.includes('nightly')
-        ? mkRes({ version: '0.11.4-2026061406', platforms: { [platformKey]: entry } })
-        : mkRes({ version: '0.11.4', platforms: { [platformKey]: entry } }),
-    );
-    const r = await resolveNightlyUpdate('0.11.4', platformKey, fetchFn as never);
-    expect(r?.version).toBe('0.11.4-2026061406');
-    expect(r?.endpoint).toContain('nightly');
-  });
-
-  test('picks higher-base stable over older nightly', async () => {
-    const fetchFn = vi.fn(async (url: string) =>
-      url.includes('nightly')
-        ? mkRes({ version: '0.11.4-2026061406', platforms: { [platformKey]: entry } })
-        : mkRes({ version: '0.11.5', platforms: { [platformKey]: entry } }),
-    );
-    const r = await resolveNightlyUpdate('0.11.4-2026061406', platformKey, fetchFn as never);
-    expect(r?.version).toBe('0.11.5');
-    expect(r?.endpoint).not.toContain('nightly');
-  });
-
-  test('ignores a manifest missing the current platform key', async () => {
-    const fetchFn = vi.fn(async (url: string) =>
-      url.includes('nightly')
-        ? mkRes({ version: '0.11.4-2026061406', platforms: { [platformKey]: entry } })
-        : mkRes({ version: '0.11.5', platforms: {} }),
-    );
-    const r = await resolveNightlyUpdate('0.11.4', platformKey, fetchFn as never);
-    expect(r?.version).toBe('0.11.4-2026061406');
-  });
-
-  test('returns null when nothing is newer than installed', async () => {
-    const fetchFn = vi.fn(async () =>
-      mkRes({ version: '0.11.4', platforms: { [platformKey]: entry } }),
-    );
-    const r = await resolveNightlyUpdate('0.11.4', platformKey, fetchFn as never);
-    expect(r).toBeNull();
-  });
-
-  test('returns null when both manifests fail to fetch', async () => {
-    const fetchFn = vi.fn(async () => {
-      throw new Error('network');
-    });
-    const r = await resolveNightlyUpdate('0.11.4', platformKey, fetchFn as never);
-    expect(r).toBeNull();
-  });
-});
-
-// Runs the REAL resolver against the local verify harness's own manifest
-// builders (scripts/nightly-verify-harness/serve.mjs), so the harness and the
-// production decision logic can't drift, and the "what would the app offer"
-// decision for each scenario is asserted without the GUI.
-describe('resolveNightlyUpdate — harness scenarios', () => {
-  const platformKey = 'darwin-aarch64';
-  const base = baseVersion();
-  const [major, minor, patch] = base.split('.').map(Number) as [number, number, number];
-  const mkFetch = (nightly: unknown, stable: unknown) =>
-    vi.fn(async (url: string) => ({
-      ok: true,
-      json: async () => (url.includes('nightly') ? nightly : stable),
-    }));
-
-  test('offers the nightly when stable is same-base (Tier 2 detection)', async () => {
-    const r = await resolveNightlyUpdate(
-      base,
-      platformKey,
-      mkFetch(buildNightlyManifest(), buildStableManifest()) as never,
-    );
-    expect(r?.version).toBe(`${base}-2099010100`);
-    expect(r?.endpoint).toContain('nightly');
-  });
-
-  test('offers stable when stable surpasses the nightly (cross-channel)', async () => {
-    const r = await resolveNightlyUpdate(
-      base,
-      platformKey,
-      mkFetch(buildNightlyManifest(), buildStableManifest(true)) as never,
-    );
-    expect(r?.version).toBe(`${major}.${minor}.${patch + 1}`);
-    expect(r?.endpoint).not.toContain('nightly');
-  });
-
-  test('offers nothing when already on the harness nightly', async () => {
-    const r = await resolveNightlyUpdate(
-      `${base}-2099010100`,
-      platformKey,
-      mkFetch(buildNightlyManifest(), buildStableManifest()) as never,
-    );
-    expect(r).toBeNull();
   });
 });

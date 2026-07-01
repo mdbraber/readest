@@ -8,6 +8,7 @@ import { ThemeSupa } from '@supabase/auth-ui-shared';
 import { FcGoogle } from 'react-icons/fc';
 import { FaApple, FaGithub, FaDiscord } from 'react-icons/fa';
 import { IoArrowBack } from 'react-icons/io5';
+import { MdDns } from 'react-icons/md';
 
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/utils/supabase';
@@ -27,6 +28,7 @@ import { getUserProfilePlan } from '@/utils/access';
 import { getAppleIdAuth, Scope } from './utils/appleIdAuth';
 import { authWithCustomTab, authWithSafari } from './utils/nativeAuth';
 import WindowButtons from '@/components/WindowButtons';
+import ServerSettingsPanel from '@/components/settings/ServerSettingsPanel';
 
 type OAuthProvider = 'google' | 'apple' | 'azure' | 'github' | 'discord';
 
@@ -42,7 +44,7 @@ interface ProviderLoginProp {
   label: string;
 }
 
-const WEB_AUTH_CALLBACK = `${getBaseUrl()}/auth/callback`;
+const getWebAuthCallback = () => `${getBaseUrl()}/auth/callback`;
 const DEEPLINK_CALLBACK = 'readest://auth-callback';
 const USE_APPLE_SIGN_IN = process.env['NEXT_PUBLIC_USE_APPLE_SIGN_IN'] === 'true';
 
@@ -71,6 +73,7 @@ export default function AuthPage() {
   const { settings, setSettings, saveSettings } = useSettingsStore();
   const [port, setPort] = useState<number | null>(null);
   const [isMounted, setIsMounted] = useState(false);
+  const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const isOAuthServerRunning = useRef(false);
   const useCustomeOAuth = useRef(false);
 
@@ -87,7 +90,7 @@ export default function AuthPage() {
       (process.env.NODE_ENV === 'production' || appService?.isMobileApp || USE_APPLE_SIGN_IN)
     ) {
       if (appService?.isMobileApp) {
-        return isOAuth ? DEEPLINK_CALLBACK : WEB_AUTH_CALLBACK;
+        return isOAuth ? DEEPLINK_CALLBACK : getWebAuthCallback();
       }
       return DEEPLINK_CALLBACK;
     }
@@ -99,7 +102,7 @@ export default function AuthPage() {
 
   const getWebRedirectTo = () => {
     return process.env.NODE_ENV === 'production'
-      ? WEB_AUTH_CALLBACK
+      ? getWebAuthCallback()
       : `${window.location.origin}/auth/callback`;
   };
 
@@ -417,6 +420,22 @@ export default function AuthPage() {
             label={_('Sign in with {{provider}}', { provider: 'Discord' })}
           />
           <hr aria-hidden='true' className='border-base-300 my-3 mt-6 w-64 border-t' />
+          <div className='mb-3 w-64'>
+            <button
+              type='button'
+              className='btn btn-ghost btn-sm flex w-full items-center justify-center gap-2'
+              onClick={() => setServerSettingsOpen((open) => !open)}
+              aria-expanded={serverSettingsOpen}
+            >
+              <MdDns />
+              {_('Self-hosted server')}
+            </button>
+          </div>
+          {serverSettingsOpen && (
+            <div className='mb-4 w-full'>
+              <ServerSettingsPanel compact />
+            </div>
+          )}
           <div className='w-full'>
             <Auth
               supabaseClient={supabase}
