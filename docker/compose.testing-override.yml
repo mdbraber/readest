@@ -1,0 +1,23 @@
+# Testing override — switches the client from the published image to a local
+# build of the testing-infra branch. All other settings (URLs, ports, Supabase)
+# stay identical to the production setup.
+#
+# Docker Compose automatically loads docker-compose.override.yml from the
+# working directory. Symlink this file there to enable testing; remove it to
+# revert to the production image — no command changes needed either way.
+#
+#   Switch to testing:
+#     ln -sf ../readest/docker/compose.testing-override.yml docker-compose.override.yml
+#     docker compose up -d --build
+#
+#   Switch back to production:
+#     rm docker-compose.override.yml
+#     docker compose up -d
+
+services:
+  client:
+    build:
+      context: ..
+      target: production-stage
+    pull_policy: never
+    image: nedworks/readest:testing

@@ -1,0 +1,40 @@
+# External Caddy reverse-proxy config for self-hosted Readest.
+#
+# Supabase auth and REST are routed through the SAME host as the app
+# (e.g. readest.example.com) — no separate supabase subdomain needed.
+#
+# The internal Caddy shim (docker/caddy-internal/Caddyfile) listens on
+# KONG_HTTP_PORT (default 8000) and strips the /auth/v1 / /rest/v1 prefix
+# before forwarding to GoTrue (port 9999) and PostgREST (port 3000).
+#
+# Set in your .env:
+#   SITE_URL=https://readest.example.com
+#   SUPABASE_PUBLIC_URL=https://readest.example.com   # same host
+#   KONG_HTTP_PORT=8000
+
+readest.example.com {
+    # Supabase auth + REST → internal Caddy shim (replaces Kong)
+    handle /auth/v1/* {
+        reverse_proxy localhost:8000
+    }
+    handle /rest/v1/* {
+        reverse_proxy localhost:8000
+    }
+    # Everything else (incl. /api/*, /.well-known/*) → Next.js
+    handle {
+        reverse_proxy localhost:3000
+    }
+}
+
+# Optional: testing instance on a separate vhost
+# readest-test.example.com {
+#     handle /auth/v1/* {
+#         reverse_proxy localhost:8000
+#     }
+#     handle /rest/v1/* {
+#         reverse_proxy localhost:8000
+#     }
+#     handle {
+#         reverse_proxy localhost:3001
+#     }
+# }
