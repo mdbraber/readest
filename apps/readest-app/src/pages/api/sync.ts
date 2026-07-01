@@ -283,8 +283,12 @@ export async function POST(req: NextRequest) {
             const serverData: any = serverRecordsMap.get(key);
             if (!serverData) return dbRec;
             // Resolve position timestamps: prefer progress_updated_at, fallback to updated_at
-            const clientProgTs = new Date(dbRec.progress_updated_at || dbRec.updated_at || 0).getTime();
-            const serverProgTs = new Date(serverData.progress_updated_at || serverData.updated_at || 0).getTime();
+            const clientProgTs = new Date(
+              dbRec.progress_updated_at || dbRec.updated_at || 0,
+            ).getTime();
+            const serverProgTs = new Date(
+              serverData.progress_updated_at || serverData.updated_at || 0,
+            ).getTime();
             const serverPositionNewer = serverProgTs > clientProgTs;
             if (serverPositionNewer) {
               // Keep server's reading position; client's other fields can still win
