@@ -59,6 +59,7 @@ that xcodegen adds (required once after cloning, and again after any upstream iO
 cd apps/readest-app
 pnpm tauri ios init
 xattr -cr src-tauri/gen/apple/
+pnpm patch-ios-dark-icon   # re-add the iOS 18 dark-appearance app icon (dropped by init)
 ```
 
 ---
@@ -100,6 +101,7 @@ Only needed after pulling upstream changes that touch iOS project configuration:
 ```bash
 pnpm tauri ios init
 xattr -cr src-tauri/gen/apple/
+pnpm patch-ios-dark-icon
 pnpm tauri ios build
 ```
 
@@ -123,6 +125,14 @@ grep -E "DEVELOPMENT_TEAM|PRODUCT_BUNDLE_IDENTIFIER" src-tauri/gen/apple/Readest
 ```
 All entries should show `D3S5M885YQ` and `com.mdbraber.readest` (with `.ShareExtension` suffix for that target).
 
+`tauri ios init` also regenerates `AppIcon.appiconset` as a legacy multi-size set, dropping the dark-appearance app icon. Re-apply it:
+
+```bash
+pnpm patch-ios-dark-icon
+```
+
+This rewrites `AppIcon.appiconset/Contents.json` to the single-size (universal 1024) layout with a light + dark 1024 — the only format actool honors app-icon appearances in — and copies the tracked dark 1024 into the set. iOS < 18 ignores it; iOS 18+ shows it on the dark home screen.
+
 ---
 
 ## What differs from upstream defaults
@@ -137,3 +147,5 @@ These changes are committed to `main` and build under a personal Apple Developer
 | `src-tauri/gen/apple/Readest_iOS/Info.plist` | Hand-tuned plist (was missing from repo); adds `UILaunchStoryboardName`, `CFBundlePackageType`, `CFBundleVersion` |
 | `src-tauri/Info-ios.plist` | Added `UILaunchStoryboardName`, `CFBundlePackageType`, `CFBundleVersion` |
 | `src-tauri/tauri.ios.conf.json` | Disables `appLink` so Tauri doesn't inject `associated-domains` on every init |
+| `src-tauri/icons/ios/AppIcon-512@2x-dark.png` | Dark-appearance app icon (transparent background, white square removed) — 1024 source |
+| `scripts/patch-ios-dark-icon.mjs` | Re-applies the dark app icon after `tauri ios init` (run via `pnpm patch-ios-dark-icon`) |
