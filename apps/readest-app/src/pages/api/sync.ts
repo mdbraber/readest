@@ -7,9 +7,63 @@ import { transformBookConfigToDB } from '@/utils/transform';
 import { transformBookNoteToDB } from '@/utils/transform';
 import { transformBookToDB } from '@/utils/transform';
 import { runMiddleware, corsAllMethods } from '@/utils/cors';
-import { SyncData, SyncRecord, SyncResult, SyncType } from '@/libs/sync';
+import { SyncData, SyncRecord, SyncResult, SyncType, StatPageRecord } from '@/libs/sync';
 import { validateUserAndToken } from '@/utils/access';
 import { DBBook, DBBookConfig } from '@/types/records';
+
+const pageKey = (r: StatPageRecord) => `${r.book_hash}|${r.page}|${r.start_time}`;
+
+export function pickWinningPages(
+  incoming: StatPageRecord[],
+  server: Map<string, StatPageRecord>,
+): { toUpsert: StatPageRecord[] } {
+  const toUpsert: StatPageRecord[] = [];
+  for (const rec of incoming) {
+    const existing = server.get(pageKey(rec));
+    if (!existing || rec.duration > existing.duration) toUpsert.push(rec);
+  }
+  return { toUpsert };
+}
+
+export const readingStatusChanged = (client?: string | null, server?: string | null): boolean =>
+  (client ?? null) !== (server ?? null);
+
+export function resolveReadingStatusMerge(
+  client: Pick<DBBook, 'reading_status' | 'reading_status_updated_at'>,
+  server: Pick<DBBook, 'reading_status' | 'reading_status_updated_at'>,
+): Pick<DBBook, 'reading_status' | 'reading_status_updated_at'> {
+  const ms = (s?: string | null) => (s ? new Date(s).getTime() : 0);
+  return ms(client.reading_status_updated_at) >= ms(server.reading_status_updated_at)
+    ? {
+        reading_status: client.reading_status,
+        reading_status_updated_at: client.reading_status_updated_at,
+      }
+    : {
+        reading_status: server.reading_status,
+        reading_status_updated_at: server.reading_status_updated_at,
+      };
+}
+
+export function buildStatusPropagationRow(
+  serverBook: DBBook,
+  status: Pick<DBBook, 'reading_status' | 'reading_status_updated_at'>,
+): DBBook {
+  return {
+    ...serverBook,
+    reading_status: status.reading_status,
+    reading_status_updated_at: status.reading_status_updated_at,
+  };
+}
+
+export function resolveCoverMerge(
+  client: Pick<DBBook, 'cover_hash' | 'cover_updated_at'>,
+  server: Pick<DBBook, 'cover_hash' | 'cover_updated_at'>,
+): Pick<DBBook, 'cover_hash' | 'cover_updated_at'> {
+  const ms = (s?: string | null) => (s ? new Date(s).getTime() : 0);
+  return ms(client.cover_updated_at) >= ms(server.cover_updated_at)
+    ? { cover_hash: client.cover_hash, cover_updated_at: client.cover_updated_at }
+    : { cover_hash: server.cover_hash, cover_updated_at: server.cover_updated_at };
+}
 
 const transformsToDB = {
   books: transformBookToDB,
@@ -278,18 +332,23 @@ export async function POST(req: NextRequest) {
       if (toUpdate.length > 0) {
         let finalToUpdate = toUpdate;
         if (table === 'book_configs') {
-          finalToUpdate = toUpdate.map((dbRec: any) => {
-            const key = primaryKeys.map((pk) => dbRec[pk]).join('|');
-            const serverData: any = serverRecordsMap.get(key);
+          finalToUpdate = toUpdate.map((dbRec) => {
+            const cfg = dbRec as DBBookConfig;
+            const cfgKey = primaryKeys
+              .map((pk) => (cfg as unknown as Record<string, string>)[pk])
+              .join('|');
+            const serverData = serverRecordsMap.get(cfgKey) as DBBookConfig | undefined;
             if (!serverData) return dbRec;
             // Resolve position timestamps: prefer progress_updated_at, fallback to updated_at
-            const clientProgTs = new Date(dbRec.progress_updated_at || dbRec.updated_at || 0).getTime();
-            const serverProgTs = new Date(serverData.progress_updated_at || serverData.updated_at || 0).getTime();
+            const clientProgTs = new Date(cfg.progress_updated_at || cfg.updated_at || 0).getTime();
+            const serverProgTs = new Date(
+              serverData.progress_updated_at || serverData.updated_at || 0,
+            ).getTime();
             const serverPositionNewer = serverProgTs > clientProgTs;
             if (serverPositionNewer) {
               // Keep server's reading position; client's other fields can still win
               return {
-                ...dbRec,
+                ...cfg,
                 progress: serverData.progress,
                 location: serverData.location,
                 xpointer: serverData.xpointer,

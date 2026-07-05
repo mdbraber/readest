@@ -13,9 +13,9 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleShortVersionString</key>
-	<string>$(MARKETING_VERSION)</string>
+	<string>0.11.17</string>
 	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<string>0.11.17</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>UILaunchStoryboardName</key>
@@ -155,6 +155,14 @@
 				<string>readest</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.googleusercontent.apps.gdrive-oauth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.209390247301-ctpmep68ppfa56r1b8tr35e4qi4p60kq</string>
+			</array>
+		</dict>
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
@@ -232,7 +240,7 @@
 			<key>UTTypeIdentifier</key>
 			<string>org.mobipocket.mobi</string>
 			<key>UTTypeDescription</key>
-			<string>EPUB Document</string>
+			<string>MOBI Document</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>

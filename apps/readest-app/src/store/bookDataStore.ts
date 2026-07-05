@@ -2,8 +2,35 @@ import { create } from 'zustand';
 import { SystemSettings } from '@/types/settings';
 import { Book, BookConfig, BookNote } from '@/types/book';
 import { EnvConfigType } from '@/services/environment';
+import { AppService } from '@/types/system';
 import { BookDoc } from '@/libs/document';
 import { useLibraryStore } from './libraryStore';
+
+const LIBRARY_SAVE_THROTTLE_MS = 2000;
+let librarySaveTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let librarySaveAppService: AppService | null = null;
+
+const scheduleLibrarySave = (appService: AppService) => {
+  librarySaveAppService = appService;
+  if (librarySaveTimeoutId !== null) return;
+  librarySaveTimeoutId = setTimeout(() => {
+    librarySaveTimeoutId = null;
+    const svc = librarySaveAppService;
+    if (!svc) return;
+    const { library } = useLibraryStore.getState();
+    svc.saveLibraryBooks(library).catch((err: unknown) => {
+      console.warn('Throttled library save failed:', err);
+    });
+  }, LIBRARY_SAVE_THROTTLE_MS);
+};
+
+export const flushPendingLibrarySave = async () => {
+  if (librarySaveTimeoutId == null || !librarySaveAppService) return;
+  clearTimeout(librarySaveTimeoutId);
+  librarySaveTimeoutId = null;
+  const { library } = useLibraryStore.getState();
+  await librarySaveAppService.saveLibraryBooks(library);
+};
 
 export interface BookData {
   /* Persistent data shared with different views of the same book */
@@ -126,7 +153,7 @@ export const useBookDataStore = create<BookDataState>((set, get) => ({
     get().setConfig(bookKey, { updatedAt: now, progressUpdatedAt: nextProgressUpdatedAt });
     const configToSave = { ...config, updatedAt: now, progressUpdatedAt: nextProgressUpdatedAt };
     await appService.saveBookConfig(updatedBook, configToSave, settings);
-    await appService.saveLibraryBooks(useLibraryStore.getState().library);
+    scheduleLibrarySave(appService);
   },
   updateBooknotes: (key: string, booknotes: BookNote[]) => {
     let updatedConfig: BookConfig | undefined;

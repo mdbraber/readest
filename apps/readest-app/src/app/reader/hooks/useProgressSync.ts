@@ -54,7 +54,7 @@ export const useProgressSync = (bookKey: string) => {
       serializeConfig(newConfig, settings.globalViewSettings, DEFAULT_BOOK_SEARCH_CONFIG),
     );
     delete compressedConfig.booknotes;
-    console.log("[sync-push] pushing config", {
+    console.log('[sync-push] pushing config', {
       bookHash,
       progressUpdatedAt: compressedConfig.progressUpdatedAt,
       updatedAt: compressedConfig.updatedAt,
@@ -195,16 +195,13 @@ export const useProgressSync = (bookKey: string) => {
       const result = await syncClient.pullChanges(0, 'configs', bookHash, metaHash);
       const dbConfigs = (result.configs ?? []) as unknown as DBBookConfig[];
       const transformed = dbConfigs.map((c) => transformBookConfigFromDB(c));
-      serverConfig = transformed.find(
-        (c) => c.bookHash === bookHash || c.metaHash === metaHash,
-      );
+      serverConfig = transformed.find((c) => c.bookHash === bookHash || c.metaHash === metaHash);
     } catch (err) {
       console.warn('[sync] pull-on-flip failed; falling through to push', err);
     }
 
     if (serverConfig) {
-      const serverProgTs =
-        serverConfig.progressUpdatedAt ?? serverConfig.updatedAt ?? 0;
+      const serverProgTs = serverConfig.progressUpdatedAt ?? serverConfig.updatedAt ?? 0;
       const lastSeen = lastSyncedProgressTs.current;
       const serverIsNewer = serverProgTs > lastSeen;
       console.log('[sync] flip-sync decision', {
@@ -331,14 +328,12 @@ export const useProgressSync = (bookKey: string) => {
       return;
     }
 
-    const remoteProgTs =
-      syncedConfig.progressUpdatedAt ?? syncedConfig.updatedAt ?? 0;
+    const remoteProgTs = syncedConfig.progressUpdatedAt ?? syncedConfig.updatedAt ?? 0;
 
     // Use snapshot captured at hook init (before foliate's synthetic
     // initial setProgress could pollute). Fallback to current state if
     // somehow not captured yet.
-    const localIsFresh =
-      initialFreshness.current ?? !config.progressUpdatedAt;
+    const localIsFresh = initialFreshness.current ?? !config.progressUpdatedAt;
 
     if (localIsFresh || remoteProgTs > localProgTs) {
       console.log('[sync] initial-pull: applying server position', {

@@ -43,6 +43,7 @@
     "tauri:build:test": "dotenv -e .env.tauri -- tauri build --debug --features webdriver",
     "tauri": "tauri",
     "patch-tauri-selfhost": "node scripts/patch-tauri-selfhost.mjs",
+    "patch-ios-dark-icon": "node scripts/patch-ios-dark-icon.mjs",
     "fmt:check": "cargo fmt -p Readest --check",
     "clippy:check": "cargo clippy -p Readest --no-deps -- -D warnings",
     "test:rust": "cargo test -p Readest --lib",
