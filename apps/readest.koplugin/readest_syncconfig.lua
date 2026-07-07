@@ -325,6 +325,17 @@ function SyncConfig:pull(ui, settings, client, book_hash, meta_hash, interactive
         })
     end
 
+    -- Freeze the local position and its authored-at at request-start time.
+    -- The newness decision below must reflect the state when the pull began,
+    -- so a local move made while the request is in flight (or while a
+    -- resume-pull is still retrying/backing off) cannot retroactively defeat
+    -- a pull that started first: a pull that started before you moved wins.
+    -- With no concurrent move these equal the live values, so normal pulls
+    -- are unchanged.
+    local start_drs = ui.doc_settings and ui.doc_settings:readSetting("readest_sync") or {}
+    local start_sig = self:localPositionSig(ui)
+    local start_prog = self:syncedAuthoredAt(start_drs, start_sig)
+
     client:pullChanges(
         {
             since = 0,
@@ -378,11 +389,11 @@ function SyncConfig:pull(ui, settings, client, book_hash, meta_hash, interactive
                     -- sync_progress_backwards only governs DIRECTION in applyBookConfig.
                     local server_sig = self:serverPositionSig(ui, config)
                     local server_prog = config.progress_updated_at or config.updated_at
-                    local my_sig = self:localPositionSig(ui)
-                    local my_prog = self:syncedAuthoredAt(doc_readest_sync, my_sig)
-                    local server_is_newer = self:isServerNewer(my_prog, server_prog)
+                    -- Compare against the request-start snapshot, not the live
+                    -- position, so a concurrent local move can't flip the decision.
+                    local server_is_newer = self:isServerNewer(start_prog, server_prog)
                     logger.dbg("ReadestSync pull: server_prog=" .. tostring(server_prog)
-                        .. " my_prog=" .. tostring(my_prog)
+                        .. " start_prog=" .. tostring(start_prog)
                         .. " sync_progress_backwards=" .. tostring(settings.sync_progress_backwards)
                         .. " server_is_newer=" .. tostring(server_is_newer))
                     if server_is_newer then
@@ -390,7 +401,7 @@ function SyncConfig:pull(ui, settings, client, book_hash, meta_hash, interactive
                         -- Advance the watermark to the server's position we now hold
                         -- (navigated to it, or were already there) so the next pull
                         -- won't re-adopt it and the next push inherits its authored-at.
-                        if navigated or my_sig == server_sig then
+                        if navigated or start_sig == server_sig then
                             self:setSyncedPosition(doc_readest_sync, server_sig, server_prog)
                             if ui.doc_settings then
                                 ui.doc_settings:saveSetting("readest_sync", doc_readest_sync)

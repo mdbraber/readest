@@ -29,6 +29,20 @@ local API_CALL_DEBOUNCE_DELAY = 30
 local PULL_ONLINE_POLL_DELAY   = 1
 local PULL_ONLINE_POLL_INTERVAL = 3
 local PULL_ONLINE_POLL_MAX      = 8
+-- After WiFi (re)associates on wake, the route to the sync host can take
+-- several seconds to become usable even though isOnline() already returns
+-- true (it only checks Microsoft's NCSI DNS host, not our backend). A token
+-- refresh fired in that window fails at the network level ("Unknown error",
+-- nil response) — verified against server logs, which show no record of the
+-- failed attempts (they die in transit) and a 200 once the route settles.
+-- Retry the resume pull with a graduated backoff: dense early (delay grows
+-- STEP × attempt) to catch the common case where the route settles within a
+-- few seconds, widening up to MAX_DELAY to cover the occasional ~30s settle
+-- after very long inactivity. Attempts land at ~2,6,12,20,28,36s. The retry
+-- cap stops quickly if the refresh token is actually revoked.
+local REFRESH_RETRY_MAX       = 6   -- retries after the initial attempt
+local REFRESH_RETRY_STEP      = 2   -- delay grows STEP × attempt …
+local REFRESH_RETRY_MAX_DELAY = 8   -- … capped here (seconds)
 local SUPABAE_ANON_KEY_BASE64 = "ZXlKaGJHY2lPaUpJVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKemRYQmhZbUZ6WlNJc0luSmxaaUk2SW5aaWMzbDRablZ6YW1weFpIaHJhbkZzZVhOaklpd2ljbTlzWlNJNkltRnViMjRpTENKcFlYUWlPakUzTXpReE1qTTJOekVzSW1WNGNDSTZNakEwT1RZNU9UWTNNWDAuM1U1VXFhb3VfMVNnclZlMWVvOXJBcGMwdUtqcWhwUWRVWGh2d1VIbVVmZw=="
 
 local DEFAULT_API_BASE_URL = "https://web.readest.com"
@@ -145,7 +159,8 @@ end
 
 function ReadestSync:onReaderReady()
     if self.settings.access_token and (self.settings.auto_sync or self.settings.pull_on_resume) then
-        self._refresh_failed_once = nil
+        self._refresh_retries = 0
+        self._refresh_retry_scheduled = false
         self:pullWhenOnline()
     end
     self:onDispatcherRegisterReaderActions()
@@ -162,7 +177,8 @@ end
 
 function ReadestSync:onResume()
     if self.settings.access_token and self.settings.pull_on_resume then
-        self._refresh_failed_once = nil
+        self._refresh_retries = 0
+        self._refresh_retry_scheduled = false
         if NetworkMgr:isOnline() then
             self:pullProgressNow()
         elseif NetworkMgr:isConnected() then
@@ -586,18 +602,30 @@ function ReadestSync:ensureClient(interactive, callback)
     SyncAuth:withFreshToken(self.settings, self.path, function(ok, err)
         if not ok then
             logger.dbg("ReadestSync: token refresh failed, skipping sync:", err)
-            -- On a network-error refresh failure (WiFi not yet stable), retry
-            -- once via pullWhenOnline so the next poll gets a fresh attempt.
-            -- _refresh_failed_once guards against a second retry (revoked token
-            -- or persistent network failure) and is reset on each new pull cycle.
-            if not interactive and not self._refresh_failed_once then
-                self._refresh_failed_once = true
-                self:pullWhenOnline()
+            -- A network-level refresh failure right after WiFi (re)connects is
+            -- common: isOnline() reports true (NCSI DNS resolves) before the
+            -- route to the backend is usable. Retry the pull with backoff so
+            -- the refresh lands once the connection settles. _refresh_retries
+            -- caps total attempts (a genuinely revoked token stops quickly);
+            -- _refresh_retry_scheduled ensures the three concurrent pulls
+            -- (config/notes/stats) schedule only one retry per round. Both are
+            -- reset on each new pull cycle (onResume, onReaderReady).
+            if not interactive
+                    and (self._refresh_retries or 0) < REFRESH_RETRY_MAX
+                    and not self._refresh_retry_scheduled then
+                self._refresh_retry_scheduled = true
+                self._refresh_retries = (self._refresh_retries or 0) + 1
+                local delay = math.min(
+                    REFRESH_RETRY_STEP * self._refresh_retries, REFRESH_RETRY_MAX_DELAY)
+                UIManager:scheduleIn(delay, function()
+                    self._refresh_retry_scheduled = false
+                    self:pullWhenOnline()
+                end)
             end
             callback(nil)
             return
         end
-        self._refresh_failed_once = false
+        self._refresh_retries = 0
 
         local client = SyncAuth:getReadestSyncClient(self.settings, self.path)
         if not client then

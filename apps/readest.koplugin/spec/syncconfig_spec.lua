@@ -126,5 +126,26 @@ describe("readest_syncconfig progress watermark", function()
             local my_prog = SyncConfig:syncedAuthoredAt(drs, "p:10")
             assert.is_false(SyncConfig:isServerNewer(my_prog, "2026-06-30T10:00:00.000Z"))
         end)
+
+        it("a resume-pull that started first wins over a concurrent local move", function()
+            -- Resume at page 1 (no prior watermark). The pull starts and snapshots
+            -- the local state: start_sig=p:1, start_prog=nil. The server holds a
+            -- newer page 50 @ T10 (authored on another device).
+            local drs = {}
+            local start_sig = "p:1"
+            local start_prog = SyncConfig:syncedAuthoredAt(drs, start_sig) -- nil
+            local server_prog = "2026-06-30T10:00:00.000Z"
+
+            -- While the pull is in flight, the user turns a page; auto_sync's push
+            -- advances the watermark to p:2 authored 'now' (newer than the server).
+            SyncConfig:resolveProgressUpdatedAt(drs, "p:2", NOW)
+
+            -- Deciding from the LIVE watermark would now flip to "local is newer"
+            -- and drop the pull...
+            assert.is_false(SyncConfig:isServerNewer(
+                SyncConfig:syncedAuthoredAt(drs, "p:2"), server_prog))
+            -- ...but the frozen request-start snapshot still lets the server win.
+            assert.is_true(SyncConfig:isServerNewer(start_prog, server_prog))
+        end)
     end)
 end)
