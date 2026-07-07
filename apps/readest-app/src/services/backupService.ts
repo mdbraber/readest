@@ -37,6 +37,7 @@ export const BACKUP_SETTINGS_BLACKLIST = [
   'localBooksDir',
   'customRootDir',
   'externalLibraryFolders',
+  'autoImportFolders',
   'savedBookCoverForLockScreenPath',
   // Per-device identity — restoring causes sync identity / HLC collisions.
   'replicaDeviceId',
@@ -50,6 +51,10 @@ export const BACKUP_SETTINGS_BLACKLIST = [
   'hardcover.lastSyncedAt',
   'googleDrive.deviceId',
   'googleDrive.lastSyncedAt',
+  'webdav.deviceId',
+  'webdav.lastSyncedAt',
+  'webdav.providerSelectedAt',
+  'googleDrive.providerSelectedAt',
   // Transient runtime state — book keys may not exist post-restore; screen
   // brightness is live device state.
   'lastOpenBooks',

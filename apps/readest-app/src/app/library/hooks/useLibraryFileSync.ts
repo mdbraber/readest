@@ -7,6 +7,8 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useFileSyncStore } from '@/store/fileSyncStore';
 import { isCloudSyncAllowed } from '@/utils/access';
+import { isWebAppPlatform } from '@/services/environment';
+import { hasValidWebDriveToken } from '@/services/sync/providers/gdrive/auth/webTokenStore';
 import { debounce } from '@/utils/debounce';
 import { FileSyncEngine } from '@/services/sync/file/engine';
 import { createAppLocalStore } from '@/services/sync/file/appLocalStore';
@@ -14,6 +16,7 @@ import {
   createFileSyncProvider,
   type FileSyncBackendKind,
 } from '@/services/sync/file/providerRegistry';
+import { getCloudSyncProvider, settingsKeyForBackend } from '@/services/sync/cloudSyncProvider';
 
 /**
  * Library-scoped auto-sync for the active third-party cloud provider (WebDAV /
@@ -42,9 +45,6 @@ import {
 /** Quiet window before an auto library sync fires; collapses import bursts. */
 const SYNC_DEBOUNCE_MS = 5_000;
 
-const settingsKeyFor = (kind: FileSyncBackendKind): 'webdav' | 'googleDrive' =>
-  kind === 'gdrive' ? 'googleDrive' : 'webdav';
-
 export const useLibraryFileSync = () => {
   const _ = useTranslation();
   const { envConfig, appService } = useEnv();
@@ -55,11 +55,8 @@ export const useLibraryFileSync = () => {
   const { userProfilePlan } = useQuotaStats();
 
   // The single active cloud provider (WebDAV and Google Drive are exclusive).
-  const activeKind: FileSyncBackendKind | null = settings.webdav?.enabled
-    ? 'webdav'
-    : settings.googleDrive?.enabled
-      ? 'gdrive'
-      : null;
+  const provider = getCloudSyncProvider(settings);
+  const activeKind: FileSyncBackendKind | null = provider === 'readest' ? null : provider;
 
   const isAllowed = isCloudSyncAllowed(userProfilePlan ?? 'free');
   const isReady = useMemo(() => {
@@ -68,7 +65,14 @@ export const useLibraryFileSync = () => {
       const w = settings.webdav;
       return !!(w?.enabled && w?.serverUrl && w?.username);
     }
-    if (activeKind === 'gdrive') return !!settings.googleDrive?.enabled;
+    if (activeKind === 'gdrive') {
+      // Web Drive tokens are session-scoped with no refresh; once expired,
+      // every run would abort with AUTH_FAILED on the index pull. Skip the
+      // auto-sync until the user reconnects (the Drive settings form shows
+      // the Reconnect CTA), mirroring its disabled "Sync now".
+      if (isWebAppPlatform() && !hasValidWebDriveToken()) return false;
+      return !!settings.googleDrive?.enabled;
+    }
     return false;
   }, [isAllowed, activeKind, settings.webdav, settings.googleDrive]);
 
@@ -104,7 +108,7 @@ export const useLibraryFileSync = () => {
 
   const ensureDeviceId = useCallback((): string => {
     const latest = useSettingsStore.getState().settings;
-    const key = activeKind ? settingsKeyFor(activeKind) : 'webdav';
+    const key = activeKind ? settingsKeyForBackend(activeKind) : 'webdav';
     let id = latest[key]?.deviceId;
     if (!id) {
       id = uuidv4();
@@ -118,7 +122,7 @@ export const useLibraryFileSync = () => {
   const updateLastSyncedAt = useCallback(
     async (ts: number) => {
       const latest = useSettingsStore.getState().settings;
-      const key = activeKind ? settingsKeyFor(activeKind) : 'webdav';
+      const key = activeKind ? settingsKeyForBackend(activeKind) : 'webdav';
       const next = { ...latest, [key]: { ...latest[key], lastSyncedAt: ts } };
       setSettings(next);
       await saveSettings(envConfig, next);
@@ -134,7 +138,7 @@ export const useLibraryFileSync = () => {
 
     const kind = activeKind;
     const latest = useSettingsStore.getState().settings;
-    const ps = kind === 'gdrive' ? latest.googleDrive : latest.webdav;
+    const ps = latest[settingsKeyForBackend(kind)];
     const strategy = ps?.strategy ?? 'silent';
 
     const syncStore = useFileSyncStore.getState();
@@ -161,7 +165,9 @@ export const useLibraryFileSync = () => {
         },
       });
       await updateLastSyncedAt(Date.now());
+      useFileSyncStore.getState().setLastError(kind, null);
     } catch (e) {
+      useFileSyncStore.getState().setLastError(kind, e instanceof Error ? e.message : String(e));
       console.warn('library file sync failed', e);
     } finally {
       useFileSyncStore.getState().endSync(kind);
