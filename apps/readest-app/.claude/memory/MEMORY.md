@@ -133,3 +133,4 @@
 - i18n: [en plurals manual](feedback_en_plurals_manual.md); [i18n:extract prunes keys](i18n-extract-prunes-keys.md)
 - [Dependabot transitive fixes](dependabot-pnpm-overrides.md) `pnpm-workspace.yaml` `overrides:`
 - [Upgrade gstack locally](feedback_gstack_upgrade.md)
+- [iOS widget empty: App Group suiteName hardcoded](ios-widget-appgroup-suitename-hardcoded.md) — patch Swift `suiteName`, not just entitlements

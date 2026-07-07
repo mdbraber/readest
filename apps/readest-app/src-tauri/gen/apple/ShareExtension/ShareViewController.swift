@@ -7,7 +7,7 @@
 //
 //   1. App Group queue + responder-chain launch.
 //      `AppGroupBridge.appendPendingSave` writes the URL + chosen group
-//      to the shared NSUserDefaults at `group.com.bilingify.readest`.
+//      to the shared NSUserDefaults at `group.com.mdbraber.readest`.
 //      We then walk the UIResponder chain looking for an object that
 //      responds to `openURL:options:completionHandler:` (UIApplication)
 //      and dispatch via an objc-runtime IMP cast. This is the pattern
