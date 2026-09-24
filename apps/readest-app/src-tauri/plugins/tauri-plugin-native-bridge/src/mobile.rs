@@ -46,6 +46,15 @@ impl<R: Runtime> NativeBridge<R> {
             .run_mobile_plugin("copy_uri_to_path", payload)
             .map_err(Into::into)
     }
+
+    pub fn render_pdf_cover(
+        &self,
+        payload: RenderPdfCoverRequest,
+    ) -> crate::Result<RenderPdfCoverResponse> {
+        self.0
+            .run_mobile_plugin("render_pdf_cover", payload)
+            .map_err(Into::into)
+    }
 }
 
 impl<R: Runtime> NativeBridge<R> {
@@ -63,6 +72,35 @@ impl<R: Runtime> NativeBridge<R> {
     pub fn use_background_audio(&self, payload: UseBackgroundAudioRequest) -> crate::Result<()> {
         self.0
             .run_mobile_plugin("use_background_audio", payload)
+            .map_err(Into::into)
+    }
+}
+
+impl<R: Runtime> NativeBridge<R> {
+    /// The MulticastLock is an Android concept; iOS delivers multicast
+    /// without one (entitlements permitting), so this is a no-op there.
+    pub fn set_multicast_lock(&self, payload: MulticastLockRequest) -> crate::Result<()> {
+        #[cfg(target_os = "android")]
+        {
+            self.0
+                .run_mobile_plugin("set_multicast_lock", payload)
+                .map_err(Into::into)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = payload;
+            Ok(())
+        }
+    }
+}
+
+impl<R: Runtime> NativeBridge<R> {
+    pub fn set_selection_suppressed(
+        &self,
+        payload: SetSelectionSuppressedRequest,
+    ) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("set_selection_suppressed", payload)
             .map_err(Into::into)
     }
 }
@@ -190,6 +228,22 @@ impl<R: Runtime> NativeBridge<R> {
 }
 
 impl<R: Runtime> NativeBridge<R> {
+    pub fn set_screen_wake_lock(&self, payload: SetScreenWakeLockRequest) -> crate::Result<()> {
+        #[cfg(target_os = "ios")]
+        {
+            self.0
+                .run_mobile_plugin("set_screen_wake_lock", payload)
+                .map_err(Into::into)
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            let _ = payload;
+            Err(crate::Error::UnsupportedPlatformError)
+        }
+    }
+}
+
+impl<R: Runtime> NativeBridge<R> {
     pub fn get_screen_brightness(&self) -> crate::Result<GetScreenBrightnessResponse> {
         self.0
             .run_mobile_plugin("get_screen_brightness", ())
@@ -204,6 +258,30 @@ impl<R: Runtime> NativeBridge<R> {
     ) -> crate::Result<SetScreenBrightnessResponse> {
         self.0
             .run_mobile_plugin("set_screen_brightness", payload)
+            .map_err(Into::into)
+    }
+}
+
+impl<R: Runtime> NativeBridge<R> {
+    pub fn has_ambient_light_sensor(&self) -> crate::Result<HasAmbientLightSensorResponse> {
+        self.0
+            .run_mobile_plugin("has_ambient_light_sensor", ())
+            .map_err(Into::into)
+    }
+}
+
+impl<R: Runtime> NativeBridge<R> {
+    pub fn start_ambient_light_updates(&self) -> crate::Result<AmbientLightUpdatesResponse> {
+        self.0
+            .run_mobile_plugin("start_ambient_light_updates", ())
+            .map_err(Into::into)
+    }
+}
+
+impl<R: Runtime> NativeBridge<R> {
+    pub fn stop_ambient_light_updates(&self) -> crate::Result<AmbientLightUpdatesResponse> {
+        self.0
+            .run_mobile_plugin("stop_ambient_light_updates", ())
             .map_err(Into::into)
     }
 }
@@ -242,6 +320,17 @@ impl<R: Runtime> NativeBridge<R> {
     pub fn select_directory(&self) -> crate::Result<SelectDirectoryResponse> {
         self.0
             .run_mobile_plugin("select_directory", ())
+            .map_err(Into::into)
+    }
+}
+
+impl<R: Runtime> NativeBridge<R> {
+    // Android only. Fire-and-forget: the picked URIs are delivered via the
+    // `file-picker-result` plugin event so they survive activity/process
+    // recreation behind the system picker (#1217).
+    pub fn show_file_picker(&self) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("show_file_picker", ())
             .map_err(Into::into)
     }
 }
@@ -352,6 +441,41 @@ impl<R: Runtime> NativeBridge<R> {
             .run_mobile_plugin("clip_url", payload)
             .map_err(Into::into)
     }
+
+    /// Present the native in-app browser (`WebBrowserController.swift/.kt`).
+    /// Blocks until the user closes it; downloads arrive meanwhile as
+    /// `web-browser-download` plugin events.
+    pub fn open_web_browser(
+        &self,
+        payload: WebBrowserRequest,
+    ) -> crate::Result<WebBrowserResponse> {
+        self.0
+            .run_mobile_plugin("open_web_browser", payload)
+            .map_err(Into::into)
+    }
+
+    pub fn web_browser_cookies(&self, payload: WebBrowserCookiesRequest) -> crate::Result<WebBrowserCookiesResponse> {
+        self.0.run_mobile_plugin("web_browser_cookies", payload).map_err(Into::into)
+    }
+
+    /// Push an import status into the open browser's banner.
+    pub fn set_web_browser_status(&self, payload: WebBrowserStatusRequest) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin::<serde::de::IgnoredAny>("set_web_browser_status", payload)
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
+    /// Read + delete a Share-Extension-captured page HTML file from the
+    /// App Group container (iOS only; Android resolves `html: None`).
+    pub fn read_share_clip_html(
+        &self,
+        payload: ReadShareClipHtmlRequest,
+    ) -> crate::Result<ReadShareClipHtmlResponse> {
+        self.0
+            .run_mobile_plugin("read_share_clip_html", payload)
+            .map_err(Into::into)
+    }
 }
 
 impl<R: Runtime> NativeBridge<R> {
@@ -380,5 +504,42 @@ impl<R: Runtime> NativeBridge<R> {
         base64::engine::general_purpose::STANDARD
             .decode(response.data)
             .map_err(|e| crate::Error::NativeBridgeError(format!("invalid base64 PNG: {e}")))
+    }
+
+    /// Native cover for the two-column page curl (#6106); see the Swift
+    /// side. Android has no implementation yet and rejects.
+    pub fn cover_webview_region(
+        &self,
+        payload: CaptureWebviewRegionRequest,
+    ) -> crate::Result<CoverWebviewRegionResponse> {
+        self.0
+            .run_mobile_plugin("cover_webview_region", payload)
+            .map_err(Into::into)
+    }
+
+    pub fn uncover_webview_region(
+        &self,
+        payload: UncoverWebviewRegionRequest,
+    ) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("uncover_webview_region", payload)
+            .map_err(Into::into)
+    }
+}
+
+impl<R: Runtime> NativeBridge<R> {
+    pub fn icloud_container_status(&self) -> crate::Result<ICloudContainerStatusResponse> {
+        self.0
+            .run_mobile_plugin("icloud_container_status", ())
+            .map_err(Into::into)
+    }
+
+    pub fn icloud_ensure_downloaded(
+        &self,
+        payload: ICloudEnsureDownloadedRequest,
+    ) -> crate::Result<ICloudEnsureDownloadedResponse> {
+        self.0
+            .run_mobile_plugin("icloud_ensure_downloaded", payload)
+            .map_err(Into::into)
     }
 }

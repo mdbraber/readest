@@ -17,6 +17,36 @@ msgstr "Readest"
 msgid "Keeps your KOReader and Readest devices in sync."
 msgstr "ཁྱེད་ཀྱི་ KOReader དང་ Readest སྒྲིག་ཆས་མཉམ་འགྱུར་འཇོག"
 
+msgid "Downloading %1 of %2…"
+msgstr "%2 ནང་གི་ %1 ཕབ་ལེན་བྱེད་བཞིན་པ་…"
+
+msgid "%1 MB downloaded"
+msgstr "%1 MB ཕབ་ལེན་བྱས་ཟིན།"
+
+msgid "No downloads in progress."
+msgstr "ཕབ་ལེན་བྱེད་བཞིན་པ་མེད།"
+
+msgid "Run in background"
+msgstr "རྒྱབ་ལྗོངས་སུ་འཁོར་སྐྱོད་བྱེད།"
+
+msgid "Cancel download"
+msgstr "ཕབ་ལེན་ཕྱིར་འཐེན།"
+
+msgid "Download cancelled. %1 of %2 downloaded."
+msgstr "ཕབ་ལེན་འདོར་སོང་། %2 ནང་གི་ %1 ཕབ་ལེན་ཟིན།"
+
+msgid "Downloaded %1 of %2 (skipped %3)."
+msgstr "%2 ནང་གི་ %1 ཕབ་ལེན་ཟིན། (%3 མཆོངས་སོང་།)"
+
+msgid "Downloaded %1 of %2."
+msgstr "%2 ནང་གི་ %1 ཕབ་ལེན་ཟིན།"
+
+msgid "Set Home folder in File Manager first to enable downloads."
+msgstr "ཕབ་ལེན་སྤྱོད་རུང་བཟོ་བར་ཡིག་ཆ་དོ་དམ་པའི་ནང་གཙོ་བོའི་ཡིག་སྣོད་སྔོན་ལ་གཏན་འབེབས་གནང་རོགས།"
+
+msgid "No books to download."
+msgstr "ཕབ་ལེན་བྱ་རྒྱུའི་དེབ་མེད།"
+
 msgid "Library view"
 msgstr "དཔེ་མཛོད་མཐོང་སྣང་"
 
@@ -68,8 +98,14 @@ msgstr "ཡར་འཛེག་"
 msgid "Actions"
 msgstr "བྱ་བ་"
 
+msgid "Sync now"
+msgstr "ད་ལྟ་མཉམ་འགྲོས་བྱེད།"
+
 msgid "Download all books"
 msgstr "དེབ་ཡོངས་ཕབ་ལེན་"
+
+msgid "Download progress"
+msgstr "ཕབ་ལེན་གྱི་འཕེལ་རིམ།"
 
 msgid "Rescan library"
 msgstr "དཔེ་མཛོད་ཡང་བསྐྱར་ཞིབ་ཤིབ་"
@@ -104,6 +140,12 @@ msgstr "དཔེ་མཛོད་ནང་འཚོལ་"
 msgid "Search title or author"
 msgstr "མིང་བྱང་ངམ་རྩོམ་པ་པོ་འཚོལ་"
 
+msgid "Books synced"
+msgstr "དེབ་མཉམ་སྦྱོར་ཟིན་"
+
+msgid "Books sync failed"
+msgstr "དེབ་མཉམ་སྦྱོར་མ་ཐུབ་"
+
 msgid "Cover Browser plugin required for full Library rendering. Falling back to plain list."
 msgstr "དཔེ་མཛོད་ཡོངས་སུ་འཆར་སྟོན་བྱེད་པར་Cover Browser གསལ་སྣོན་དགོས། མིང་ཐོ་གསལ་པོར་ལོག་སོང་།"
 
@@ -116,18 +158,6 @@ msgstr "དེབ་འདི་Readestནས་ཕབ་ལེན་བྱེ�
 msgid "Download"
 msgstr "ཕབ་ལེན་"
 
-msgid "Set Home folder in File Manager first to enable downloads."
-msgstr "ཕབ་ལེན་སྤྱོད་རུང་བཟོ་བར་ཡིག་ཆ་དོ་དམ་པའི་ནང་གཙོ་བོའི་ཡིག་སྣོད་སྔོན་ལ་གཏན་འབེབས་གནང་རོགས།"
-
-msgid "Downloading…"
-msgstr "ཕབ་ལེན་བྱེད་བཞིན་པ་…"
-
-msgid "Cloud copy unavailable."
-msgstr "སྤྲིན་གྲུབ་པར་མེད།"
-
-msgid "Download failed."
-msgstr "ཕབ་ལེན་མ་ཐུབ།"
-
 msgid "No cover available on Readest."
 msgstr "Readestལ་འགྲམ་ཤོག་མེད།"
 
@@ -137,20 +167,8 @@ msgstr "འགྲམ་ཤོག་ཕབ་ལེན་མ་ཐུབ།"
 msgid "Could not delete the file."
 msgstr "ཡིག་ཆ་སུབ་མ་ཐུབ།"
 
-msgid "No books to download."
-msgstr "ཕབ་ལེན་བྱ་རྒྱུའི་དེབ་མེད།"
-
-msgid "Downloading %1 of %2…"
-msgstr "%2 ནང་གི་ %1 ཕབ་ལེན་བྱེད་བཞིན་པ་…"
-
-msgid "Download cancelled. %1 of %2 downloaded."
-msgstr "ཕབ་ལེན་འདོར་སོང་། %2 ནང་གི་ %1 ཕབ་ལེན་ཟིན།"
-
-msgid "Downloaded %1 of %2 (skipped %3)."
-msgstr "%2 ནང་གི་ %1 ཕབ་ལེན་ཟིན། (%3 མཆོངས་སོང་།)"
-
-msgid "Downloaded %1 of %2."
-msgstr "%2 ནང་གི་ %1 ཕབ་ལེན་ཟིན།"
+msgid "Download group"
+msgstr "ཚོ་སྡེ་ཕབ་ལེན།"
 
 msgid "Removing from cloud…"
 msgstr "སྤྲིན་གྲུབ་ནས་སུབ་བཞིན་པ་…"
@@ -190,6 +208,9 @@ msgstr "གསོག་འཇོག་ཁྱོན་བསྡོམས་ལས
 
 msgid "Upload failed."
 msgstr "སྦར་འཛུགས་མ་ཐུབ།"
+
+msgid "Send to nearby Readest devices"
+msgstr "ཉེ་འགྲམ་གྱི་ Readest སྒྲིག་ཆས་ལ་སྐུར།"
 
 msgid "Download Book"
 msgstr "དེབ་ཕབ་ལེན་"
@@ -233,8 +254,11 @@ msgstr "སྒྲིག་ཆས་འདི་ནས་ Readest མཆན་འ
 msgid "Pull readest annotations from other devices"
 msgstr "སྒྲིག་ཆས་གཞན་ནས་ Readest མཆན་འགྲེལ་ལེན་པ།"
 
-msgid "Add to Readest"
-msgstr "Readestལ་སྣོན་པ་"
+msgid "Full sync all readest annotations"
+msgstr "Readest མཆན་འགྲེལ་ཡོངས་རྫོགས་ཆ་ཚང་མཉམ་འགྱུར།"
+
+msgid "Add to Readest library"
+msgstr "Readest དཔེ་མཛོད་དུ་སྣོན།"
 
 msgid "Sign in to Readest first."
 msgstr "ཐོག་མར་Readestལ་ཐོ་འཇུག་གནང་རོགས།"
@@ -257,6 +281,12 @@ msgstr "ཁྱེད་ཀྱི་Readestདཔེ་མཛོད་ནང་�
 msgid "Added to Readest:"
 msgstr "Readestལ་སྣོན་ཟིན་:"
 
+msgid "No book is open"
+msgstr "དཔེ་ཆ་ཁ་ཕྱེ་མེད།"
+
+msgid "Uploaded to Readest:"
+msgstr "Readest ལ་སྦར་ཟིན་:"
+
 msgid "Log in Readest Account"
 msgstr "Readest རྩིས་ཐོར་འཛུལ་ཞུགས།"
 
@@ -275,17 +305,14 @@ msgstr "གྲངས་ཐོ་ད་ལྟ་སྐུར་"
 msgid "Pull stats now"
 msgstr "གྲངས་ཐོ་ད་ལྟ་ལེན་"
 
-msgid "Push books now"
-msgstr "དེབ་རྣམས་ད་ལྟ་སྐུར་"
-
-msgid "Pull books now"
-msgstr "དེབ་རྣམས་ད་ལྟ་ལེན་"
-
 msgid "Push reading progress now"
 msgstr "ད་ལྟ་ཀློག་པའི་འཕེལ་རིམ་སྐུར་བ།"
 
 msgid "Pull reading progress now"
 msgstr "ད་ལྟ་ཀློག་པའི་འཕེལ་རིམ་ལེན་པ།"
+
+msgid "Upload current book to Readest"
+msgstr "མིག་སྔའི་དཔེ་ཆ་ Readest ལ་སྦར་བ།"
 
 msgid "Push annotations now"
 msgstr "ད་ལྟ་མཆན་འགྲེལ་སྐུར་བ།"
@@ -299,6 +326,9 @@ msgstr "མཆན་འགྲེལ་ཡོངས་རྫོགས་ཆ་ཚ
 msgid "Sync info"
 msgstr "མཉམ་འགྱུར་གསལ་བཤད།"
 
+msgid "Receive via Nearby BookDrop"
+msgstr "Nearby BookDrop བརྒྱུད་ནས་ལེན།"
+
 msgid "Check for update (v%1)"
 msgstr "གསར་སྤེལ་ཞིབ་བཤེར (v%1)"
 
@@ -310,9 +340,6 @@ msgstr "དང་པོ་འཛུལ་ཞུགས་གནང་རོགས
 
 msgid "Please configure Readest settings first"
 msgstr "དང་པོ་ Readest སྒྲིག་འགོད་གནང་རོགས།"
-
-msgid "No book is open"
-msgstr "དཔེ་ཆ་ཁ་ཕྱེ་མེད།"
 
 msgid "(none)"
 msgstr "(མེད)"
@@ -335,11 +362,89 @@ msgstr "མཉམ་འགྱུར་གསལ་བཤད།"
 msgid "Library not initialized"
 msgstr "དཔེ་མཛོད་འགོ་འཛུགས་མ་བྱས་པ་"
 
-msgid "Books synced"
-msgstr "དེབ་མཉམ་སྦྱོར་ཟིན་"
+msgid "Set a Readest download folder or a KOReader home folder first."
+msgstr "ཐོག་མར་ Readest ཕབ་ལེན་ཡིག་སྣོད་དམ་ KOReader གཙོ་ཡིག་སྣོད་ཅིག་སྒྲིག་རོགས།"
 
-msgid "Books sync failed"
-msgstr "དེབ་མཉམ་སྦྱོར་མ་ཐུབ་"
+msgid "Nearby BookDrop error: could not find a free port."
+msgstr "Nearby BookDrop ནོར་འཁྲུལ: འབྲེལ་མཐུད་ཁ་སྟོང་པ་ཞིག་རྙེད་མ་སོང་།"
+
+msgid "Nearby BookDrop failed to start."
+msgstr "Nearby BookDrop འགོ་འཛུགས་མ་ཐུབ།"
+
+msgid "Starting Nearby BookDrop…"
+msgstr "Nearby BookDrop འགོ་འཛུགས་བཞིན…"
+
+msgid "Nearby BookDrop will start when Wi-Fi connects."
+msgstr "Wi-Fi འབྲེལ་མཐུད་སྐབས་ Nearby BookDrop འགོ་འཛུགས།"
+
+msgid "… and %1 more"
+msgstr "… དང་ %1 ལྷག"
+
+msgid "%1 wants to send you %2 file(s) (%3):"
+msgstr "%1 ཡིས་ཁྱེད་ལ་ཡིག་ཆ་ %2 སྐུར་འདོད་ (%3):"
+
+msgid "Accept"
+msgstr "ངོས་ལེན།"
+
+msgid "Decline"
+msgstr "དོར།"
+
+msgid "Receiving %1 file(s) from %2…"
+msgstr "%2 ནས་ཡིག་ཆ་ %1 ལེན་བཞིན…"
+
+msgid "Nearby BookDrop: received %1 file(s), %2 failed."
+msgstr "Nearby BookDrop: ཡིག་ཆ་ %1 ལེན་ཟིན། %2 ཕམ།"
+
+msgid "Nearby BookDrop transfer cancelled."
+msgstr "Nearby BookDrop སྤོ་འདྲེན་ཕྱིར་འཐེན་བྱས།"
+
+msgid "Nearby BookDrop: received %1 file(s)."
+msgstr "Nearby BookDrop: ཡིག་ཆ་ %1 ལེན་ཟིན།"
+
+msgid "Nearby BookDrop not available on this device"
+msgstr "སྒྲིག་ཆས་འདིར་ Nearby BookDrop མི་འཐོབ།"
+
+msgid "Scanning for nearby devices…"
+msgstr "ཉེ་འགྲམ་གྱི་སྒྲིག་ཆས་འཚོལ་བཞིན…"
+
+msgid "No nearby devices found. Make sure the other device has Nearby BookDrop or LocalSend open."
+msgstr "ཉེ་འགྲམ་དུ་སྒྲིག་ཆས་གང་ཡང་མ་རྙེད། སྒྲིག་ཆས་གཞན་དེར་ Nearby BookDrop ཡང་ན་ LocalSend ཁ་ཕྱེ་ཡོད་པ་ངེས་པར་བྱོས།"
+
+msgid "Rescan"
+msgstr "སླར་ཡང་འཚོལ།"
+
+msgid "Send to…"
+msgstr "སྐུར་ས་…"
+
+msgid "Sending…"
+msgstr "སྐུར་བཞིན…"
+
+msgid "Sending… %1%"
+msgstr "སྐུར་བཞིན… %1%"
+
+msgid "Sent %1 file(s)."
+msgstr "ཡིག་ཆ་ %1 བསྐུར་ཟིན།"
+
+msgid "The other device declined the transfer."
+msgstr "སྒྲིག་ཆས་གཞན་དེས་སྤོ་འདྲེན་དོར་སོང་།"
+
+msgid "Transfer cancelled."
+msgstr "སྤོ་འདྲེན་ཕྱིར་འཐེན་བྱས།"
+
+msgid "Send failed: %1"
+msgstr "སྐུར་བ་ཕམ: %1"
+
+msgid "Nearby BookDrop error: %1"
+msgstr "Nearby BookDrop ནོར་འཁྲུལ: %1"
+
+msgid "Nearby BookDrop off"
+msgstr "Nearby BookDrop བཀག"
+
+msgid "Visible as %1"
+msgstr "%1 ཞེས་མངོན།"
+
+msgid "(limited discovery)"
+msgstr "(རྙེད་འཚོལ་ཚད་བཀག)"
 
 msgid "Checking for update…"
 msgstr "གསར་སྤེལ་ཞིབ་བཤེར་བཞིན་པ…"

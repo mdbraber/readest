@@ -4,12 +4,17 @@ import { EXTS } from '@/libs/document';
 import { getDir, getLocalBookFilename } from '@/utils/book';
 import { isContentURI, isValidURL } from '@/utils/misc';
 import { isPseStreamFileName } from './opds/pseStream';
+import { isFeedBookUrl } from '@/services/rss/feedBookUrl';
+import { findABSServerById } from '@/store/absServerStore';
+import { createAbsEbookFetcher } from '@/services/audiobookshelf/ebookFetch';
+import { buildAbsEbookUrl, isAbsEbook, parseAbsFilePath } from '@/utils/audiobook';
 
 export type BookContentSource =
   | { kind: 'managed'; path: string; base: 'Books'; legacy?: boolean }
   | { kind: 'external'; path: string; base: 'None' }
-  | { kind: 'url'; path: string; base: 'None' }
+  | { kind: 'url'; path: string; base: 'None'; fetcher?: typeof fetch }
   | { kind: 'stream'; path: string; base: 'None'; scheme: 'pse' }
+  | { kind: 'feed'; path: string; base: 'None' }
   | { kind: 'missing' };
 
 export type BookFileContentSource = Extract<
@@ -49,6 +54,23 @@ export async function resolveBookContentSource(
     return { kind: 'managed', path: managedPath, base: 'Books' };
   }
 
+  if (isAbsEbook(book)) {
+    const parsed = parseAbsFilePath(book.filePath);
+    if (parsed) {
+      const server = findABSServerById(parsed.serverId);
+      if (server) {
+        return {
+          kind: 'url',
+          path: buildAbsEbookUrl(server, parsed.itemId),
+          base: 'None',
+          // The fetcher, not the path, owns the token: it re-reads the store's
+          // current one on every range request and refreshes on a 401.
+          fetcher: createAbsEbookFetcher(server, parsed.itemId),
+        };
+      }
+    }
+  }
+
   if (book.filePath) {
     // Android "Open with Readest" hands us a content:// URI as the
     // book.filePath (e.g. content://media/external/file/1322). Tauri's
@@ -66,6 +88,9 @@ export async function resolveBookContentSource(
   }
 
   if (book.url) {
+    if (isFeedBookUrl(book.url)) {
+      return { kind: 'feed', path: book.url, base: 'None' };
+    }
     if (isPseStreamFileName(book.url)) {
       return { kind: 'stream', path: book.url, base: 'None', scheme: 'pse' };
     }

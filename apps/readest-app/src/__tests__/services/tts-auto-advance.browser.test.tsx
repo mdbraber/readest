@@ -22,7 +22,7 @@ import { useParagraphMode } from '@/app/reader/hooks/useParagraphMode';
 // <foliate-view> renders Alice and lays out pages, the real TTSController
 // walks the real `view.tts` over the real document, and the real
 // `useTTSControl` hook (with the real Zustand stores) drives the page turn
-// and the "Back to TTS Location" badge. The client is the single seam — the
+// and the "Back to Read Aloud" badge. The client is the single seam — the
 // thing that would otherwise talk to a speech engine / network.
 //
 // The controller's #speak() loop only inspects the event `code`: when the
@@ -66,7 +66,12 @@ function makeMockTTSClient(name: string): TTSClient {
     getAllVoices: () => Promise.resolve([]),
     getVoices: () => Promise.resolve([]),
     getGranularities: () => ['sentence'],
-    supportsWordBoundaries: () => false,
+    getCapabilities: () => ({
+      wordBoundaries: false,
+      mediaClock: false,
+      gapControl: false,
+      liveRateChange: false,
+    }),
     getVoiceId: () => 'mock-voice',
     getSpeakingLang: () => 'en',
   };
@@ -78,8 +83,17 @@ vi.mock('@/services/tts/WebSpeechClient', () => ({
   }),
 }));
 vi.mock('@/services/tts/EdgeTTSClient', () => ({
+  // useTTSControl also imports this named const from the same module; the
+  // mock factory replaces the whole module, so it must re-export it too.
+  DEFAULT_SENTENCE_GAP_SEC: 0.15,
   EdgeTTSClient: vi.fn().mockImplementation(function (this: Record<string, unknown>) {
-    Object.assign(this, makeMockTTSClient('edge'));
+    // TTSController.setSentenceGap/setParagraphGap always forward to the real
+    // ttsEdgeClient instance regardless of the active engine, so this mock
+    // needs both methods even though the other two client mocks don't.
+    Object.assign(this, makeMockTTSClient('edge'), {
+      setSentenceGap: () => {},
+      setParagraphGap: () => {},
+    });
   }),
 }));
 vi.mock('@/services/tts/NativeTTSClient', () => ({
@@ -198,6 +212,7 @@ const seedStores = (view: FoliateView, viewSettings: ViewSettings) => {
         error: null,
         ribbonVisible: false,
         ttsEnabled: false,
+        autoScrollEnabled: false,
         syncing: false,
         gridInsets: null,
         previewMode: false,
@@ -254,7 +269,7 @@ afterEach(async () => {
 });
 
 describe('TTS auto-advance across a chapter boundary (browser e2e)', () => {
-  it('reads from the last paragraph of Ch4 into Ch5, turns the page, and shows no "Back to TTS Location" badge', async () => {
+  it('reads from the last paragraph of Ch4 into Ch5, turns the page, and shows no "Back to Read Aloud" badge', async () => {
     const viewSettings: ViewSettings = {
       ...getDefaultViewSettings({
         fs: {} as FileSystem,
@@ -322,7 +337,7 @@ describe('TTS auto-advance across a chapter boundary (browser e2e)', () => {
     expect(ttsLocation).toBeTruthy();
     expect(view.resolveCFI(ttsLocation!).index).toBe(CH5_SECTION_INDEX);
 
-    // 3. No "Back to TTS Location" badge — the TTS location is already in view,
+    // 3. No "Back to Read Aloud" badge — the TTS location is already in view,
     //    so the gating flag is false now and never flipped true while crossing.
     expect(result.current.showBackToCurrentTTSLocation).toBe(false);
     expect(badgeEverAppeared).toBe(false);

@@ -12,20 +12,20 @@ import {
 import { hasValidWebDriveToken } from '@/services/sync/providers/gdrive/auth/webTokenStore';
 import { Tips } from '../primitives';
 import FileSyncForm from './FileSyncForm';
-import { persistActiveCloudProvider } from './cloudSync';
+import { persistCloudProviderEnabled } from './cloudSync';
 
 const disconnectButtonClass = clsx(
   'eink-bordered',
   'h-10 rounded-lg px-4 text-sm font-medium',
   'text-error hover:bg-error/10',
   'transition-colors duration-150',
-  'focus-visible:ring-error/40 focus-visible:outline-none focus-visible:ring-2',
+  'focus-visible:ring-error/40 focus-visible:outline-hidden focus-visible:ring-2',
 );
 
 const primaryButtonClass = clsx(
   'btn btn-contrast',
   'h-10 min-h-10 rounded-lg border-0 px-5 text-sm font-medium',
-  'focus-visible:ring-base-content/40 focus-visible:outline-none focus-visible:ring-2',
+  'focus-visible:ring-base-content/40 focus-visible:outline-hidden focus-visible:ring-2',
 );
 
 /**
@@ -35,11 +35,12 @@ const primaryButtonClass = clsx(
  * - **Active** (`googleDrive.enabled`): the shared {@link FileSyncForm} controls
  *   + Disconnect (which clears the keychain token — a full teardown).
  * - **Configured but inactive** (a token exists — `accountLabel` is set — but
- *   another provider is active): "Use Google Drive" re-activates it WITHOUT a
- *   fresh sign-in, so switching back is frictionless; Disconnect tears it down.
+ *   Drive itself is switched off): "Use Google Drive" re-activates it WITHOUT
+ *   a fresh sign-in, so switching back is frictionless; Disconnect tears it down.
  * - **Not connected**: the OAuth Connect button.
  *
- * Activating makes Drive the single active cloud provider (turns WebDAV off).
+ * Activating turns Drive on; every other provider is left exactly as it was
+ * (#5062).
  */
 const GoogleDriveForm: React.FC = () => {
   const _ = useTranslation();
@@ -65,10 +66,10 @@ const GoogleDriveForm: React.FC = () => {
     await saveSettings(envConfig, next);
   };
 
-  // Make Drive the active provider (turns WebDAV off), optionally stamping a
-  // freshly-resolved account label.
+  // Switch Drive on, optionally stamping a freshly-resolved account label.
+  // Every other provider is left untouched (#5062).
   const activate = async (accountLabel?: string) => {
-    await persistActiveCloudProvider(envConfig, 'gdrive', (s) =>
+    await persistCloudProviderEnabled(envConfig, 'gdrive', true, (s) =>
       accountLabel === undefined ? s : { ...s, googleDrive: { ...s.googleDrive, accountLabel } },
     );
   };
@@ -97,7 +98,9 @@ const GoogleDriveForm: React.FC = () => {
 
   const handleDisconnect = async () => {
     await runGoogleDriveDisconnect();
-    await persistActiveCloudProvider(envConfig, null, (s) => ({
+    // Switch Drive off and clear its account label (a full teardown). Other
+    // providers keep syncing.
+    await persistCloudProviderEnabled(envConfig, 'gdrive', false, (s) => ({
       ...s,
       googleDrive: { ...s.googleDrive, accountLabel: undefined },
     }));
@@ -153,8 +156,10 @@ const GoogleDriveForm: React.FC = () => {
         </div>
         <Tips>
           <li>
-            {_('Connected as {{account}}', { account: stored.accountLabel })}
-            {_('. Make Google Drive the active cloud provider.')}
+            {_('Connected as {{account}}. Turn {{provider}} on to start syncing.', {
+              account: stored.accountLabel,
+              provider: 'Google Drive',
+            })}
           </li>
         </Tips>
       </div>

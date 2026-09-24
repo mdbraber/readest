@@ -6,8 +6,17 @@ import type { ViewSettings } from '@/types/book';
 vi.mock('@/store/bookDataStore', async () => {
   const { create } = await import('zustand');
   return {
-    useBookDataStore: create(() => ({
-      booksData: {} as Record<string, unknown>,
+    useBookDataStore: create<{
+      booksData: Record<string, unknown>;
+      clearBookData: (keyOrId: string) => void;
+    }>((set) => ({
+      booksData: {},
+      clearBookData: (keyOrId: string) =>
+        set((state) => {
+          const booksData = { ...state.booksData };
+          delete booksData[keyOrId.split('-')[0]!];
+          return { booksData };
+        }),
     })),
   };
 });
@@ -60,9 +69,18 @@ vi.mock('@/services/opds/pseStream', () => ({
   openPseStreamBook: vi.fn(),
   parsePseStreamFileName: vi.fn(),
 }));
+vi.mock('@/services/rss/feedBookUrl', () => ({
+  isFeedBookUrl: () => false,
+  parseFeedBookUrl: vi.fn(),
+}));
+vi.mock('@/services/rss/feedReader', () => ({
+  openFeedBookDoc: vi.fn(),
+}));
 
 import { useReaderStore } from '@/store/readerStore';
-import { useBookDataStore } from '@/store/bookDataStore';
+import { useBookDataStore, type BookData } from '@/store/bookDataStore';
+import { useLibraryStore } from '@/store/libraryStore';
+import { uniqueId } from '@/utils/misc';
 
 /**
  * Helper to seed a minimal ViewState in the store for a given key.
@@ -81,6 +99,7 @@ function seedViewState(key: string, overrides: Record<string, unknown> = {}) {
         error: null,
         ribbonVisible: false,
         ttsEnabled: false,
+        autoScrollEnabled: false,
         syncing: false,
         gridInsets: null,
         previewMode: false,
@@ -319,5 +338,120 @@ describe('readerStore', () => {
       useReaderStore.getState().setViewInited('book-1', false);
       expect(useReaderStore.getState().viewStates['book-1']!.inited).toBe(false);
     });
+  });
+
+  describe('recreateViewer', () => {
+    test.each(['', 'closed-book'])('does not reload a missing viewer (%s)', (key) => {
+      const initViewState = vi.fn().mockResolvedValue(undefined);
+      const original = useReaderStore.getState().initViewState;
+      useReaderStore.setState({ initViewState });
+      try {
+        useReaderStore.getState().recreateViewer({} as never, key);
+        expect(initViewState).not.toHaveBeenCalled();
+      } finally {
+        useReaderStore.setState({ initViewState: original });
+      }
+    });
+
+    test.each([
+      { key: '', loading: true, error: null },
+      { key: '', loading: false, error: 'Failed to load book.' },
+      { key: 'another-book', loading: false, error: null },
+    ])('does not reload an invalid stored view: %j', (viewState) => {
+      seedViewState('book-1', viewState);
+      const initViewState = vi.fn().mockResolvedValue(undefined);
+      const original = useReaderStore.getState().initViewState;
+      useReaderStore.setState({ initViewState });
+      try {
+        useReaderStore.getState().recreateViewer({} as never, 'book-1');
+        expect(initViewState).not.toHaveBeenCalled();
+      } finally {
+        useReaderStore.setState({ initViewState: original });
+      }
+    });
+
+    // Regression test for #5277: `initViewState` already mints a fresh
+    // viewerKey, so minting a second one here remounted <FoliateViewer> twice.
+    // The abandoned first mount kept opening the same bookDoc and left an extra
+    // `data` transform listener on its shared loader, so every stylesheet was
+    // transformed twice and the book's fonts were replaced by the app's.
+    test('mints a single viewerKey so the viewer mounts only once', async () => {
+      seedViewState('book-1', { viewerKey: 'book-1-uid-0' });
+
+      let counter = 0;
+      const uniqueIdMock = vi.mocked(uniqueId);
+      uniqueIdMock.mockImplementation(() => `uid-${++counter}`);
+
+      // Stand in for the real initViewState, which reloads the book and ends by
+      // assigning a fresh viewerKey of its own.
+      const initViewState = vi.fn(async (_envConfig: unknown, _id: string, key: string) => {
+        useReaderStore.setState((state) => ({
+          viewStates: {
+            ...state.viewStates,
+            [key]: { ...state.viewStates[key]!, viewerKey: `${key}-${uniqueId()}` },
+          },
+        }));
+      });
+      useReaderStore.setState({
+        initViewState: initViewState as unknown as ReturnType<
+          typeof useReaderStore.getState
+        >['initViewState'],
+      });
+
+      const mountedKeys: string[] = [];
+      const unsubscribe = useReaderStore.subscribe((state) => {
+        const viewerKey = state.viewStates['book-1']?.viewerKey;
+        if (viewerKey && mountedKeys.at(-1) !== viewerKey) mountedKeys.push(viewerKey);
+      });
+
+      useReaderStore.getState().recreateViewer({} as never, 'book-1');
+      await vi.waitFor(() => expect(initViewState).toHaveBeenCalled());
+      await Promise.resolve();
+      await Promise.resolve();
+      unsubscribe();
+
+      expect(mountedKeys).toEqual(['book-1-uid-1']);
+      uniqueIdMock.mockImplementation(() => 'mock-uid-123');
+    });
+  });
+});
+
+describe('clearViewState and the streamed ABS ebook cache', () => {
+  const absEbook = { format: 'ABS', metadata: { absMediaType: 'ebook' } };
+  const epub = { format: 'EPUB' };
+
+  beforeEach(() => {
+    useReaderStore.setState({ viewStates: {}, bookKeys: [], hoveredBookKey: null });
+    const cached = { bookDoc: {} } as unknown as BookData;
+    useBookDataStore.setState({ booksData: { abc: cached, def: cached } });
+  });
+
+  test('drops the cached book data of an ABS ebook when its last view closes', () => {
+    vi.mocked(useLibraryStore.getState().getBookByHash).mockReturnValue(absEbook as never);
+    seedViewState('abc-view1');
+
+    useReaderStore.getState().clearViewState('abc-view1');
+
+    expect(useBookDataStore.getState().booksData['abc']).toBeUndefined();
+    expect(useBookDataStore.getState().booksData['def']).toBeDefined();
+  });
+
+  test('keeps the cache while another view of the same ABS ebook is still open', () => {
+    vi.mocked(useLibraryStore.getState().getBookByHash).mockReturnValue(absEbook as never);
+    seedViewState('abc-view1');
+    seedViewState('abc-view2');
+
+    useReaderStore.getState().clearViewState('abc-view1');
+
+    expect(useBookDataStore.getState().booksData['abc']).toBeDefined();
+  });
+
+  test('keeps the cache of a local book so a reopen stays instant', () => {
+    vi.mocked(useLibraryStore.getState().getBookByHash).mockReturnValue(epub as never);
+    seedViewState('abc-view1');
+
+    useReaderStore.getState().clearViewState('abc-view1');
+
+    expect(useBookDataStore.getState().booksData['abc']).toBeDefined();
   });
 });

@@ -27,8 +27,11 @@ import { createStarDictProvider, type DictionaryFileOpener } from './providers/s
 import { createMdictProvider } from './providers/mdictProvider';
 import { createDictProvider } from './providers/dictProvider';
 import { createSlobProvider } from './providers/slobProvider';
+import { createBglProvider } from './providers/bglProvider';
 import { createWebSearchProvider } from './providers/webSearchProvider';
 import { getBuiltinWebSearch } from './webSearchTemplates';
+import { createPluginDictionaryProvider } from './plugins/provider';
+import type { AppService } from '@/types/system';
 
 const instanceCache = new Map<string, DictionaryProvider>();
 
@@ -103,6 +106,23 @@ const getOrCreate = (
   }
   if (dict.kind === 'slob') {
     const provider = createSlobProvider({ dict, fs });
+    instanceCache.set(id, provider);
+    return provider;
+  }
+  if (dict.kind === 'bgl') {
+    const provider = createBglProvider({ dict, fs });
+    instanceCache.set(id, provider);
+    return provider;
+  }
+  if (dict.kind === 'plugin') {
+    const pluginHost = fs as DictionaryFileOpener &
+      Partial<Pick<AppService, 'openDatabase' | 'deleteDatabase'>>;
+    if (!pluginHost.openDatabase || !pluginHost.deleteDatabase) return undefined;
+    const provider = createPluginDictionaryProvider({
+      dict,
+      host: pluginHost as DictionaryFileOpener &
+        Pick<AppService, 'openDatabase' | 'deleteDatabase'>,
+    });
     instanceCache.set(id, provider);
     return provider;
   }

@@ -14,6 +14,7 @@ import {
   DirEntry,
 } from '@tauri-apps/plugin-fs';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { open as openDialog, save as saveDialog, ask } from '@tauri-apps/plugin-dialog';
 import {
   join,
@@ -25,6 +26,7 @@ import {
   tempDir,
 } from '@tauri-apps/api/path';
 import { type as osType } from '@tauri-apps/plugin-os';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { shareFile } from '@choochmeque/tauri-plugin-sharekit-api';
 
 import {
@@ -35,14 +37,29 @@ import {
   FileItem,
   DistChannel,
 } from '@/types/system';
+import type { Book } from '@/types/book';
+import { needsQueryRangeReads } from '@/utils/ua';
 import { getOSPlatform, isContentURI, isFileURI, isValidURL } from '@/utils/misc';
 import { getDirPath, getFilename } from '@/utils/path';
 import { NativeFile, RemoteFile } from '@/utils/file';
-import { copyURIToPath, getStorefrontRegionCode, saveImageToGallery } from '@/utils/bridge';
+import {
+  copyURIToPath,
+  getStorefrontRegionCode,
+  hasAmbientLightSensor,
+  saveImageToGallery,
+} from '@/utils/bridge';
+import { galleryFileName } from '@/utils/image';
 import { copyFiles } from '@/utils/files';
 import { detectViewTransitionGroup, detectViewTransitionsAPI } from '@/utils/viewTransition';
+import { useLibraryStore } from '@/store/libraryStore';
 
 import { BaseAppService } from './appService';
+import {
+  buildCoverThumbnailRequests,
+  COVER_THUMBNAIL_READY_EVENT,
+  type CoverThumbnailRequest,
+  type CoverThumbnailReadyPayload,
+} from './coverThumbnailService';
 import { DatabaseOpts, DatabaseService } from '@/types/database';
 import { SchemaType } from '@/services/database/migrate';
 import {
@@ -283,12 +300,12 @@ export const nativeFileSystem: FileSystem = {
   async getImageURL(path: string) {
     return this.getURL(path);
   },
-  async openFile(path: string, base: BaseDir, name?: string) {
+  async openFile(path: string, base: BaseDir, name?: string, fetcher?: typeof fetch) {
     const normalizedPath = OS_TYPE === 'ios' ? safeDecodePath(path) : path;
     const { fp, baseDir } = this.resolvePath(normalizedPath, base);
     let fname = safeDecodePath(name || getFilename(fp));
     if (isValidURL(path)) {
-      return await new RemoteFile(path, fname).open();
+      return await new RemoteFile(path, fname, '', Date.now(), fetcher ?? tauriFetch).open();
     } else if (isContentURI(path) || (isFileURI(path) && OS_TYPE === 'ios')) {
       fname = safeDecodePath(await basename(path));
       if (path.includes('com.android.externalstorage')) {
@@ -300,7 +317,7 @@ export const nativeFileSystem: FileSystem = {
         // or file:// URIs is security scoped resource in iOS (e.g. from Files app),
         // we cannot access the file directly — so we copy it to a temporary cache location.
         const prefix = await this.getPrefix('Cache');
-        const dst = await join(prefix, decodeURIComponent(fname));
+        const dst = await join(prefix, `${crypto.randomUUID()}-${decodeURIComponent(fname)}`);
         const res = await copyURIToPath({ uri: path, dst });
         if (!res.success) {
           console.error('Failed to open file:', res);
@@ -310,13 +327,14 @@ export const nativeFileSystem: FileSystem = {
       }
     } else if (isFileURI(path)) {
       return await new NativeFile(fp, fname, baseDir ? baseDir : null).open();
-    } else if (OS_TYPE === 'android') {
-      // Android can't use the asset protocol for ranged reads — its WebView
-      // re-applies a `Range` header's offset to intercepted bodies and corrupts
-      // non-zero-start reads (Chromium 40739128). Instead route reads through
-      // the `rangefile` custom scheme, which carries the range in the URL query
-      // (no `Range` header) so the WebView delivers the bytes verbatim, still
-      // over the network stack rather than the slow Tauri IPC bridge.
+    } else if (needsQueryRangeReads(OS_TYPE)) {
+      // Android and Linux can't use the asset protocol for ranged reads —
+      // Chromium re-applies a `Range` header's offset to intercepted bodies
+      // and fails non-zero-start reads (Chromium 40739128).
+      // Instead route reads through the `rangefile` custom scheme, which
+      // carries the range in the URL query (no `Range` header) so the WebView
+      // delivers the bytes verbatim, still over the network stack rather than
+      // the slow Tauri IPC bridge.
       // Falls back to NativeFile if the path is outside the asset scope.
       try {
         const prefix = await this.getPrefix(base);
@@ -453,7 +471,7 @@ export const nativeFileSystem: FileSystem = {
       }
     }
   },
-  async readDir(path: string, base: BaseDir) {
+  async readDir(path: string, base: BaseDir, extensions?: string[]) {
     const { fp, baseDir } = this.resolvePath(path, base);
 
     const getRelativePath = (filePath: string, basePath: string): string => {
@@ -467,13 +485,17 @@ export const nativeFileSystem: FileSystem = {
       return relativePath;
     };
 
-    // Use Rust WalkDir for massive performance gain on absolute paths
+    // Use Rust WalkDir for massive performance gain on absolute paths.
+    // `extensions` filters inside the walk, so non-matching files (e.g. the
+    // covers and metadata sidecars of a Calibre-style folder) are neither
+    // stat'ed nor serialized over IPC. The JS fallback below ignores the
+    // filter — callers that pass it must still tolerate extra entries.
     if (!baseDir || baseDir === 0) {
       try {
         const files = await invoke<{ path: string; size: number }[]>('read_dir', {
           path: fp,
           recursive: true,
-          extensions: ['*'],
+          extensions: extensions?.length ? extensions : ['*'],
         });
 
         return files.map((file) => ({
@@ -572,24 +594,30 @@ export class NativeAppService extends BaseAppService {
   override hasOrientationLock =
     (OS_TYPE === 'ios' && getOSPlatform() === 'ios') || OS_TYPE === 'android';
   override hasScreenBrightness = OS_TYPE === 'ios' || OS_TYPE === 'android';
+  override hasAmbientLightSensor = false;
   override hasIAP = OS_TYPE === 'ios' || (OS_TYPE === 'android' && DIST_CHANNEL === 'playstore');
   // CustomizeRootDir has a blocker on macOS App Store builds due to Security Scoped Resource restrictions.
   // See: https://github.com/tauri-apps/tauri/issues/3716
   override canCustomizeRootDir = DIST_CHANNEL !== 'appstore';
-  override canReadExternalDir = DIST_CHANNEL !== 'appstore' && DIST_CHANNEL !== 'playstore';
-  override supportsCanvasContext2DFilter =
-    OS_TYPE !== 'ios' && OS_TYPE !== 'macos' && OS_TYPE !== 'linux';
-  // WebKitGTK on Linux crashes when a View Transition snapshots the window,
-  // so both capabilities are unavailable there regardless of what the engine
-  // reports; every other webview is gated on the real feature probe.
-  override supportsViewTransitionsAPI = OS_TYPE !== 'linux' && detectViewTransitionsAPI();
-  override supportsViewTransitionGroup = OS_TYPE !== 'linux' && detectViewTransitionGroup();
+  // Android builds — Play Store included — declare MANAGE_EXTERNAL_STORAGE, so
+  // absolute-path reads outside the app sandbox work once the user grants All
+  // Files Access. Apple offers no equivalent, so App Store builds stay gated.
+  override canReadExternalDir = DIST_CHANNEL !== 'appstore';
+  override supportsCoverThumbnailOptimization = true;
+  // WKWebView ignores `CanvasRenderingContext2D.filter`, so the Apple
+  // platforms stay gated; Windows, Android and Linux are all Chromium.
+  override supportsCanvasContext2DFilter = OS_TYPE !== 'ios' && OS_TYPE !== 'macos';
+  override supportsViewTransitionsAPI = detectViewTransitionsAPI();
+  override supportsViewTransitionGroup = detectViewTransitionGroup();
   override distChannel = DIST_CHANNEL;
   override storefrontRegionCode: string | null = null;
   override isOnlineCatalogsAccessible = true;
 
   private execDir?: string = undefined;
   private customRootDir?: string = undefined;
+  private coverThumbnailListenerReady?: Promise<void>;
+  private pendingCoverThumbnailRequests = new Map<string, CoverThumbnailRequest>();
+  private coverThumbnailFlushScheduled = false;
 
   constructor(customRootDir?: string) {
     super();
@@ -599,6 +627,9 @@ export class NativeAppService extends BaseAppService {
   }
 
   override async init() {
+    // Listener setup is allowed to overlap the rest of startup. The worker
+    // waits for it before emitting cached or newly-generated thumbnails.
+    void this.startCoverThumbnailListener().catch(() => {});
     const execDir = await invoke<string>('get_executable_dir');
     this.execDir = execDir;
     // Report the WebView User-Agent so Sentry can tag crashes with the
@@ -632,12 +663,23 @@ export class NativeAppService extends BaseAppService {
       });
     }
     const settings = await this.loadSettings();
-    if (this.customRootDir || settings.customRootDir) {
+    const customRootDir = this.customRootDir || settings.customRootDir;
+    if (customRootDir) {
       this.fs.resolvePath = getPathResolver({
-        customRootDir: this.customRootDir || settings.customRootDir,
+        customRootDir,
         isPortable: this.isPortableApp,
         execDir,
       });
+      // Validate the root before anything depends on it. We deliberately keep
+      // the custom resolver installed when it fails: silently falling back to
+      // the default location would scatter imports into a second library and
+      // make the real books look lost once the root comes back. Recording it
+      // here lets the library page name the folder instead of dying on an
+      // unhandled rejection (blank App Store window, sandbox-denied root).
+      if (!(await this.isRootDirUsable())) {
+        this.unavailableRootDir = customRootDir;
+        console.error('[nativeAppService] library root is not usable:', customRootDir);
+      }
     }
     if (this.isIOSApp) {
       this.isOnlineCatalogsAccessible = this.distChannel !== 'appstore';
@@ -655,8 +697,77 @@ export class NativeAppService extends BaseAppService {
         console.warn('[nativeAppService] getStorefrontRegionCode failed:', err);
       }
     }
+    if (this.isAndroidApp) {
+      try {
+        const res = await hasAmbientLightSensor();
+        this.hasAmbientLightSensor = !!res.available;
+      } catch (err) {
+        console.warn('[nativeAppService] hasAmbientLightSensor failed:', err);
+        this.hasAmbientLightSensor = false;
+      }
+    }
     await this.prepareBooksDir();
     await this.runMigrations();
+  }
+
+  private startCoverThumbnailListener(): Promise<void> {
+    if (this.coverThumbnailListenerReady) return this.coverThumbnailListenerReady;
+
+    const listenerReady = listen<CoverThumbnailReadyPayload>(
+      COVER_THUMBNAIL_READY_EVENT,
+      ({ payload }) => {
+        if (!payload.bookHash || !payload.thumbnailPath) return;
+        useLibraryStore
+          .getState()
+          .setBookCoverThumbnail(
+            payload.bookHash,
+            payload.coverHash,
+            convertFileSrc(payload.thumbnailPath),
+          );
+      },
+    ).then(() => undefined);
+    this.coverThumbnailListenerReady = listenerReady;
+    void listenerReady.catch((error) => {
+      if (this.coverThumbnailListenerReady === listenerReady) {
+        this.coverThumbnailListenerReady = undefined;
+      }
+      console.warn('[covers] failed to register thumbnail listener:', error);
+    });
+    return listenerReady;
+  }
+
+  override requestCoverThumbnail(book: Book): void {
+    const request = buildCoverThumbnailRequests([book])[0];
+    if (!request) return;
+    const key = `${request.bookHash}:${request.coverHash ?? 'legacy'}`;
+    this.pendingCoverThumbnailRequests.set(key, request);
+    if (this.coverThumbnailFlushScheduled) return;
+
+    this.coverThumbnailFlushScheduled = true;
+    queueMicrotask(() => {
+      this.coverThumbnailFlushScheduled = false;
+      const covers = Array.from(this.pendingCoverThumbnailRequests.values());
+      this.pendingCoverThumbnailRequests.clear();
+      void this.submitCoverThumbnailRequests(covers);
+    });
+  }
+
+  private async submitCoverThumbnailRequests(covers: CoverThumbnailRequest[]) {
+    if (covers.length === 0) return;
+
+    try {
+      await this.startCoverThumbnailListener();
+      const cacheDir = await this.fs.getPrefix('Cache');
+      await invoke('optimize_cover_thumbnails', {
+        booksDir: this.localBooksDir,
+        cacheDir,
+        covers,
+      });
+    } catch (error) {
+      // A later visibility request submits the same content-addressed job
+      // again, so interruption or a transient IPC error remains retryable.
+      console.warn('[covers] background thumbnail optimization failed:', error);
+    }
   }
 
   override async runMigrations() {
@@ -845,19 +956,27 @@ export class NativeAppService extends BaseAppService {
   ): Promise<boolean> {
     // MediaStore is Android-only; other platforms keep the saveFile/share path.
     if (!this.isAndroidApp) return false;
+    // Every image reaching here is called `image.<ext>`, which left the insert at
+    // the mercy of the OEM's duplicate handling. Name each save uniquely instead.
+    const galleryName = galleryFileName(filename);
     // Write the bytes to a Temp subdirectory (not the Temp root, mirroring the
     // share path), then hand the path to the native MediaStore insert.
     const shareDir = await this.resolveFilePath('shared', 'Temp');
     await mkdir(shareDir, { recursive: true });
-    const srcPath = await this.resolveFilePath(`shared/${filename}`, 'Temp');
+    const srcPath = await this.resolveFilePath(`shared/${galleryName}`, 'Temp');
     try {
       await writeFile(srcPath, new Uint8Array(content));
       const res = await saveImageToGallery({
         srcPath,
-        fileName: filename,
+        fileName: galleryName,
         mimeType,
         albumName: 'Readest',
       });
+      if (!res.success) {
+        // The plugin returns the MediaStore exception here. Dropping it left an
+        // OEM-specific insert failure showing up as nothing but a toast.
+        console.error('Failed to save image to gallery:', res.error);
+      }
       return res.success;
     } catch (error) {
       console.error('Failed to save image to gallery:', error);
@@ -885,6 +1004,10 @@ export class NativeAppService extends BaseAppService {
     const { getMigrations } = await import('./database/migrations');
     await migrate(db, getMigrations(schema));
     return db;
+  }
+
+  override async installDatabase(path: string, base: BaseDir, source: File): Promise<void> {
+    await this.writeFile(path, base, source);
   }
 
   async migrate20251029() {

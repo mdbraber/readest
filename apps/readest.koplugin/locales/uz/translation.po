@@ -17,6 +17,36 @@ msgstr "Readest"
 msgid "Keeps your KOReader and Readest devices in sync."
 msgstr "KOReader va Readest qurilmalaringizni sinxronlashda saqlaydi."
 
+msgid "Downloading %1 of %2…"
+msgstr "%2 tadan %1-si yuklab olinmoqda…"
+
+msgid "%1 MB downloaded"
+msgstr "%1 MB yuklab olindi"
+
+msgid "No downloads in progress."
+msgstr "Yuklab olishlar bajarilmayapti."
+
+msgid "Run in background"
+msgstr "Fonda bajarish"
+
+msgid "Cancel download"
+msgstr "Yuklab olishni bekor qilish"
+
+msgid "Download cancelled. %1 of %2 downloaded."
+msgstr "Yuklab olish bekor qilindi. %2 tadan %1 tasi yuklab olindi."
+
+msgid "Downloaded %1 of %2 (skipped %3)."
+msgstr "%2 tadan %1 tasi yuklab olindi (%3 tasi oʻtkazib yuborildi)."
+
+msgid "Downloaded %1 of %2."
+msgstr "%2 tadan %1 tasi yuklab olindi."
+
+msgid "Set Home folder in File Manager first to enable downloads."
+msgstr "Yuklab olishlarni yoqish uchun avval Fayl menejerida bosh sahifa jildini belgilang."
+
+msgid "No books to download."
+msgstr "Yuklab olish uchun kitob yoʻq."
+
 msgid "Library view"
 msgstr "Kutubxona koʻrinishi"
 
@@ -68,8 +98,14 @@ msgstr "Oʻsish boʻyicha"
 msgid "Actions"
 msgstr "Amallar"
 
+msgid "Sync now"
+msgstr "Hozir sinxronlash"
+
 msgid "Download all books"
 msgstr "Barcha kitoblarni yuklab olish"
+
+msgid "Download progress"
+msgstr "Yuklab olish jarayoni"
 
 msgid "Rescan library"
 msgstr "Kutubxonani qayta skanerlash"
@@ -104,6 +140,12 @@ msgstr "Kutubxonada qidirish"
 msgid "Search title or author"
 msgstr "Sarlavha yoki muallif boʻyicha qidirish"
 
+msgid "Books synced"
+msgstr "Kitoblar sinxronlandi"
+
+msgid "Books sync failed"
+msgstr "Kitoblarni sinxronlab boʻlmadi"
+
 msgid "Cover Browser plugin required for full Library rendering. Falling back to plain list."
 msgstr "Toʻliq kutubxona koʻrinishi uchun Cover Browser plagini talab qilinadi. Oddiy roʻyxatga oʻtilmoqda."
 
@@ -116,18 +158,6 @@ msgstr "Ushbu kitobni Readest-dan yuklab olasizmi?"
 msgid "Download"
 msgstr "Yuklab olish"
 
-msgid "Set Home folder in File Manager first to enable downloads."
-msgstr "Yuklab olishlarni yoqish uchun avval Fayl menejerida bosh sahifa jildini belgilang."
-
-msgid "Downloading…"
-msgstr "Yuklab olinmoqda…"
-
-msgid "Cloud copy unavailable."
-msgstr "Bulutdagi nusxa mavjud emas."
-
-msgid "Download failed."
-msgstr "Yuklab olib boʻlmadi."
-
 msgid "No cover available on Readest."
 msgstr "Readest-da muqova mavjud emas."
 
@@ -137,20 +167,8 @@ msgstr "Muqovani yuklab olib boʻlmadi."
 msgid "Could not delete the file."
 msgstr "Faylni oʻchirib boʻlmadi."
 
-msgid "No books to download."
-msgstr "Yuklab olish uchun kitob yoʻq."
-
-msgid "Downloading %1 of %2…"
-msgstr "%2 tadan %1-si yuklab olinmoqda…"
-
-msgid "Download cancelled. %1 of %2 downloaded."
-msgstr "Yuklab olish bekor qilindi. %2 tadan %1 tasi yuklab olindi."
-
-msgid "Downloaded %1 of %2 (skipped %3)."
-msgstr "%2 tadan %1 tasi yuklab olindi (%3 tasi oʻtkazib yuborildi)."
-
-msgid "Downloaded %1 of %2."
-msgstr "%2 tadan %1 tasi yuklab olindi."
+msgid "Download group"
+msgstr "Guruhni yuklab olish"
 
 msgid "Removing from cloud…"
 msgstr "Bulutdan olib tashlanmoqda…"
@@ -190,6 +208,9 @@ msgstr "Xotira kvotasi oshib ketdi."
 
 msgid "Upload failed."
 msgstr "Yuklab boʻlmadi."
+
+msgid "Send to nearby Readest devices"
+msgstr "Yaqin-atrofdagi Readest qurilmalariga yuborish"
 
 msgid "Download Book"
 msgstr "Kitobni yuklab olish"
@@ -233,8 +254,11 @@ msgstr "Readest izohlarini ushbu qurilmadan yuborish"
 msgid "Pull readest annotations from other devices"
 msgstr "Readest izohlarini boshqa qurilmalardan olish"
 
-msgid "Add to Readest"
-msgstr "Readest-ga qoʻshish"
+msgid "Full sync all readest annotations"
+msgstr "Barcha Readest izohlarini toʻliq sinxronlash"
+
+msgid "Add to Readest library"
+msgstr "Readest kutubxonasiga qo'shish"
 
 msgid "Sign in to Readest first."
 msgstr "Avval Readest-ga kiring."
@@ -257,6 +281,12 @@ msgstr "Allaqachon Readest kutubxonangizda:"
 msgid "Added to Readest:"
 msgstr "Readest-ga qoʻshildi:"
 
+msgid "No book is open"
+msgstr "Hech qanday kitob ochilmagan"
+
+msgid "Uploaded to Readest:"
+msgstr "Readest-ga yuklandi:"
+
 msgid "Log in Readest Account"
 msgstr "Readest hisobiga kirish"
 
@@ -275,17 +305,14 @@ msgstr "Statistikani hozir yuborish"
 msgid "Pull stats now"
 msgstr "Statistikani hozir olish"
 
-msgid "Push books now"
-msgstr "Kitoblarni hozir yuborish"
-
-msgid "Pull books now"
-msgstr "Kitoblarni hozir olish"
-
 msgid "Push reading progress now"
 msgstr "Oʻqish jarayonini hozir yuborish"
 
 msgid "Pull reading progress now"
 msgstr "Oʻqish jarayonini hozir olish"
+
+msgid "Upload current book to Readest"
+msgstr "Joriy kitobni Readest-ga yuklash"
 
 msgid "Push annotations now"
 msgstr "Izohlarni hozir yuborish"
@@ -299,6 +326,9 @@ msgstr "Barcha izohlarni toʻliq sinxronlash"
 msgid "Sync info"
 msgstr "Sinxronlash maʼlumoti"
 
+msgid "Receive via Nearby BookDrop"
+msgstr "Nearby BookDrop orqali qabul qilish"
+
 msgid "Check for update (v%1)"
 msgstr "Yangilanishni tekshirish (v%1)"
 
@@ -310,9 +340,6 @@ msgstr "Iltimos, avval tizimga kiring"
 
 msgid "Please configure Readest settings first"
 msgstr "Iltimos, avval Readest sozlamalarini sozlang"
-
-msgid "No book is open"
-msgstr "Hech qanday kitob ochilmagan"
 
 msgid "(none)"
 msgstr "(yoʻq)"
@@ -335,11 +362,89 @@ msgstr "Sinxronlash maʼlumoti"
 msgid "Library not initialized"
 msgstr "Kutubxona ishga tushirilmagan"
 
-msgid "Books synced"
-msgstr "Kitoblar sinxronlandi"
+msgid "Set a Readest download folder or a KOReader home folder first."
+msgstr "Avval Readest yuklab olish jildini yoki KOReader asosiy jildini belgilang."
 
-msgid "Books sync failed"
-msgstr "Kitoblarni sinxronlab boʻlmadi"
+msgid "Nearby BookDrop error: could not find a free port."
+msgstr "Nearby BookDrop xatosi: bo'sh port topilmadi."
+
+msgid "Nearby BookDrop failed to start."
+msgstr "Nearby BookDrop ishga tushmadi."
+
+msgid "Starting Nearby BookDrop…"
+msgstr "Nearby BookDrop ishga tushirilmoqda…"
+
+msgid "Nearby BookDrop will start when Wi-Fi connects."
+msgstr "Wi-Fi ulanganda Nearby BookDrop ishga tushadi."
+
+msgid "… and %1 more"
+msgstr "… va yana %1 ta"
+
+msgid "%1 wants to send you %2 file(s) (%3):"
+msgstr "%1 sizga %2 ta fayl yubormoqchi (%3):"
+
+msgid "Accept"
+msgstr "Qabul qilish"
+
+msgid "Decline"
+msgstr "Rad etish"
+
+msgid "Receiving %1 file(s) from %2…"
+msgstr "%2 dan %1 ta fayl qabul qilinmoqda…"
+
+msgid "Nearby BookDrop: received %1 file(s), %2 failed."
+msgstr "Nearby BookDrop: %1 ta fayl qabul qilindi, %2 tasi muvaffaqiyatsiz."
+
+msgid "Nearby BookDrop transfer cancelled."
+msgstr "Nearby BookDrop uzatishi bekor qilindi."
+
+msgid "Nearby BookDrop: received %1 file(s)."
+msgstr "Nearby BookDrop: %1 ta fayl qabul qilindi."
+
+msgid "Nearby BookDrop not available on this device"
+msgstr "Bu qurilmada Nearby BookDrop mavjud emas"
+
+msgid "Scanning for nearby devices…"
+msgstr "Yaqin-atrofdagi qurilmalar qidirilmoqda…"
+
+msgid "No nearby devices found. Make sure the other device has Nearby BookDrop or LocalSend open."
+msgstr "Yaqin-atrofda qurilma topilmadi. Boshqa qurilmada Nearby BookDrop yoki LocalSend ochiqligiga ishonch hosil qiling."
+
+msgid "Rescan"
+msgstr "Qayta qidirish"
+
+msgid "Send to…"
+msgstr "Yuborish…"
+
+msgid "Sending…"
+msgstr "Yuborilmoqda…"
+
+msgid "Sending… %1%"
+msgstr "Yuborilmoqda… %1%"
+
+msgid "Sent %1 file(s)."
+msgstr "%1 ta fayl yuborildi."
+
+msgid "The other device declined the transfer."
+msgstr "Boshqa qurilma uzatishni rad etdi."
+
+msgid "Transfer cancelled."
+msgstr "Uzatish bekor qilindi."
+
+msgid "Send failed: %1"
+msgstr "Yuborish muvaffaqiyatsiz: %1"
+
+msgid "Nearby BookDrop error: %1"
+msgstr "Nearby BookDrop xatosi: %1"
+
+msgid "Nearby BookDrop off"
+msgstr "Nearby BookDrop o'chiq"
+
+msgid "Visible as %1"
+msgstr "%1 sifatida ko'rinadi"
+
+msgid "(limited discovery)"
+msgstr "(cheklangan aniqlash)"
 
 msgid "Checking for update…"
 msgstr "Yangilanishlar tekshirilmoqda…"

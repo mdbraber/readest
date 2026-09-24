@@ -12,6 +12,10 @@ export const useDrag = (
     clientY: number;
     deltaX: number;
     deltaY: number;
+    // The system took the touch away (edge-swipe back gesture, notification
+    // shade, incoming call) instead of the user releasing it. A cancelled drag
+    // carries no decision — restore, never act on where it stopped.
+    canceled: boolean;
   }) => void,
   cursor: string = 'col-resize',
 ) => {
@@ -35,9 +39,31 @@ export const useDrag = (
       }
       startTime.current = performance.now();
 
-      document.body.style.pointerEvents = 'none';
       document.body.style.userSelect = 'none';
       document.documentElement.style.cursor = cursor;
+
+      // Cover the viewport with a transparent, top-most shield for the duration
+      // of the drag. Book content is rendered in iframes, and fixed-layout/PDF
+      // pages set inline `pointer-events: auto` on their iframe (foliate-js
+      // fixed-layout.js) which defeats a plain `body { pointer-events: none }`.
+      // Without the shield a `mouseup` released over a PDF page is delivered
+      // into the iframe's own document and never reaches these window
+      // listeners, so the drag never ends and the panel "sticks" to the cursor
+      // (readest#5043). The shield sits above every iframe, so all pointer
+      // events land on it and bubble to window, ending the drag reliably.
+      const shield = document.createElement('div');
+      shield.className = 'drag-shield';
+      Object.assign(shield.style, {
+        position: 'fixed',
+        top: '0',
+        left: '0',
+        right: '0',
+        bottom: '0',
+        zIndex: '2147483647',
+        cursor,
+        pointerEvents: 'auto',
+      });
+      document.body.appendChild(shield);
 
       const handleMove = (event: MouseEvent | TouchEvent) => {
         if (isDragging.current) {
@@ -64,10 +90,10 @@ export const useDrag = (
         }
       };
 
-      const handleEnd = (event: MouseEvent | TouchEvent) => {
+      const handleEnd = (event: MouseEvent | TouchEvent, canceled = false) => {
         isDragging.current = false;
 
-        document.body.style.pointerEvents = '';
+        shield.remove();
         document.body.style.userSelect = '';
         document.documentElement.style.cursor = '';
 
@@ -92,19 +118,26 @@ export const useDrag = (
         const velocity = deltaY / deltaT;
 
         if (onDragEnd) {
-          onDragEnd({ velocity, deltaT, clientX, clientY, deltaX, deltaY });
+          onDragEnd({ velocity, deltaT, clientX, clientY, deltaX, deltaY, canceled });
         }
 
         window.removeEventListener('mousemove', handleMove);
         window.removeEventListener('mouseup', handleEnd);
         window.removeEventListener('touchmove', handleMove);
         window.removeEventListener('touchend', handleEnd);
+        window.removeEventListener('touchcancel', handleCancel);
       };
+
+      // A cancelled touch never fires `touchend`, so without this the shield
+      // above stays in the DOM and swallows every tap until some later touch
+      // happens to end on the window.
+      const handleCancel = (event: TouchEvent) => handleEnd(event, true);
 
       window.addEventListener('mousemove', handleMove, { passive: true });
       window.addEventListener('mouseup', handleEnd);
       window.addEventListener('touchmove', handleMove, { passive: true });
       window.addEventListener('touchend', handleEnd);
+      window.addEventListener('touchcancel', handleCancel);
     },
     [onDragMove, onDragEnd, cursor],
   );

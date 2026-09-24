@@ -11,6 +11,32 @@ import { BookConfig, BookNote, Book } from '@/types/book';
 import { DBBookConfig, DBBookNote } from '@/types/records';
 
 describe('transformBookNoteToDB with xpointer fields', () => {
+  it('round-trips the reserved Notebook type and Markdown content', () => {
+    const note: BookNote = {
+      bookHash: 'abc123',
+      id: 'notebook',
+      type: 'notebook',
+      cfi: 'epubcfi(/6/2!/4/2/1:0)',
+      xpointer0: '/body/DocFragment[1]/body/p[1]/text().0',
+      note: '# Reading notes\n\nA useful idea.',
+      createdAt: 1700000000000,
+      updatedAt: 1700000001000,
+    };
+
+    const db = transformBookNoteToDB(note, 'user1');
+    const roundTrip = transformBookNoteFromDB(db);
+
+    expect(roundTrip).toMatchObject({
+      id: 'notebook',
+      type: 'notebook',
+      cfi: note.cfi,
+      xpointer0: note.xpointer0,
+      note: note.note,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+    });
+  });
+
   it('passes through xpointer0 and xpointer1', () => {
     const note: BookNote = {
       bookHash: 'abc123',
@@ -392,5 +418,32 @@ describe('transformBook coverHash + coverUpdatedAt (issue #4544)', () => {
     });
     expect(back.coverHash).toBeNull();
     expect(back.coverUpdatedAt).toBeNull();
+  });
+});
+
+describe('transformBook metadataUpdatedAt (issue #5438)', () => {
+  const userId = 'user-1';
+  const baseBook: Book = {
+    hash: 'h1',
+    format: 'EPUB',
+    title: 'T',
+    author: 'A',
+    createdAt: 1,
+    updatedAt: 2,
+  };
+
+  it('round-trips metadataUpdatedAt through the DB shape', () => {
+    const ts = Date.UTC(2026, 7, 1, 12, 0, 0);
+    const db = transformBookToDB({ ...baseBook, metadataUpdatedAt: ts }, userId);
+    expect(db.metadata_updated_at).toBe(new Date(ts).toISOString());
+    const back = transformBookFromDB(db);
+    expect(back.metadataUpdatedAt).toBe(ts);
+  });
+
+  it('leaves the column null when unset (legacy rows)', () => {
+    const db = transformBookToDB(baseBook, userId);
+    expect(db.metadata_updated_at).toBeNull();
+    const back = transformBookFromDB(db);
+    expect(back.metadataUpdatedAt).toBeNull();
   });
 });

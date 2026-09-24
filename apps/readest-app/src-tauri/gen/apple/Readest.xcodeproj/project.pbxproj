@@ -9,23 +9,28 @@
 /* Begin PBXBuildFile section */
 		09CC5CA1145D579F4A35BA86 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF6CC501CA70CA9BBEA6F3D9 /* WidgetKit.framework */; };
 		1792D73C771B1E81C35E6437 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 13DB566659AC0A0F741EBBBF /* Security.framework */; };
+		18653C7427FA61B643FB5927 /* CarPlaySceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CE7112678AB90D73F62180F /* CarPlaySceneDelegate.swift */; };
 		1F65F6BB7F9A5D5B84F5AC1E /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FB09AA381EE87AED8151864C /* WebKit.framework */; };
 		283677BE23AD394BECB28EBE /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D765B7634BFC9B2D619B82E /* MetalKit.framework */; };
 		2F73290CC16EF2B1EF671B9B /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF6CC501CA70CA9BBEA6F3D9 /* WidgetKit.framework */; };
 		44677EC36EA80A8D960F4EAA /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = BA7D35F7E90C824A389B15DD /* Sentry */; };
 		4F33997845572B54DBBE431F /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 576303E7E1596790E0DEF8DC /* libapp.a */; };
+		50A87D22EBF9FCA46AAB9CBE /* GetPageContent.js in Resources */ = {isa = PBXBuildFile; fileRef = 49682FE37CE0A63C42BE1590 /* GetPageContent.js */; };
 		6C2F2F58E6E25C554C47E527 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2F0000D58F392BC2F808417D /* Assets.xcassets */; };
 		6CD28C6C81C7C367F51FCB70 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A77628B94260724841CB0C1F /* QuartzCore.framework */; };
+		77DEFFF81AE57C6577265ADF /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 806FEDFF1D14FC258DA1A7A0 /* MediaPlayer.framework */; };
 		7B3153C771891CB24D874FB8 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1C29EFE86C85351F81C99F2A /* Metal.framework */; };
 		89B51D8F5E3BC00590E1DA6E /* ReadestWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BAD20961DC66C6D576E1F60B /* ReadestWidget.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		9E79568218100A2569F00CEA /* SentryBootstrap.m in Sources */ = {isa = PBXBuildFile; fileRef = 683FEABC98A68296CA480126 /* SentryBootstrap.m */; };
 		A3B9B497F2EC434EEEBA2235 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 1CF94262BF7499D2AD8B627D /* main.mm */; };
 		A870FB123FF2CAFB98EDCD36 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 57535F4C21FEA405C0A45945 /* CoreGraphics.framework */; };
+		AAF9140CE4DCCB761DD7E52C /* CarPlay.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F7F1EE1A41EFDFC53AA8AC46 /* CarPlay.framework */; };
 		AD210F1B265493B680566A63 /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A89C3EE1081B36DD033E747 /* WidgetSnapshot.swift */; };
 		BA0A7C5B168460D96FA21D6B /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB595336F6275E2B879AF397 /* ShareViewController.swift */; };
 		D4A0A4E1CB92879877D7319E /* ReadestWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60661C103F0FF9B56906D570 /* ReadestWidgetBundle.swift */; };
 		D59272888A2BFE858490838D /* ReadingWidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25CB7597C040DC2E2BBAAD58 /* ReadingWidgetViews.swift */; };
 		D608DE39BD2F9FA892508F37 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B62E5ED5797D06981F30B6F /* UIKit.framework */; };
+		D8686630072A4D6D59502DF8 /* CarPlayBootstrap.m in Sources */ = {isa = PBXBuildFile; fileRef = A6F7D4232EC1A743CA6CB256 /* CarPlayBootstrap.m */; };
 		E6D9510F89AD18B18D0FCBC9 /* ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = E5F4A6E57CB4895FFFBC2DE8 /* ShareExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		E853ADD6F720091D24E184FD /* AppGroupBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1EACF94D1026C7A51CD0A63 /* AppGroupBridge.swift */; };
 		EF4B1B9640A3E70CE3F329E9 /* ReadingWidgetProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4CB13FE16F5D99107B056A7 /* ReadingWidgetProvider.swift */; };
@@ -69,6 +74,7 @@
 		092369AA44558E8949D2757A /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		0EB90B3B3C88D7C6ABEDF11E /* menu.rs */ = {isa = PBXFileReference; path = menu.rs; sourceTree = "<group>"; };
 		0F0D4492F8DDE94F4DC4854F /* safari_auth.rs */ = {isa = PBXFileReference; path = safari_auth.rs; sourceTree = "<group>"; };
+		1351267D2F44D28DE9E60E70 /* window.rs */ = {isa = PBXFileReference; path = window.rs; sourceTree = "<group>"; };
 		13DB566659AC0A0F741EBBBF /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		1A5492F8B4749D670A93DE66 /* clip_url.rs */ = {isa = PBXFileReference; path = clip_url.rs; sourceTree = "<group>"; };
 		1C29EFE86C85351F81C99F2A /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
@@ -88,6 +94,7 @@
 		40409827389F82307433878B /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		46E88042CAF3013F6107F17A /* parser_common.rs */ = {isa = PBXFileReference; path = parser_common.rs; sourceTree = "<group>"; };
 		4924DDD171577C52C0C5809E /* ShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ShareExtension.entitlements; sourceTree = "<group>"; };
+		49682FE37CE0A63C42BE1590 /* GetPageContent.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = GetPageContent.js; sourceTree = "<group>"; };
 		4B62E5ED5797D06981F30B6F /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		4C4A7AE08BDD49657A0C749E /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		57535F4C21FEA405C0A45945 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
@@ -97,12 +104,16 @@
 		661E6D88481643D5928A8853 /* discord_rpc.rs */ = {isa = PBXFileReference; path = discord_rpc.rs; sourceTree = "<group>"; };
 		683FEABC98A68296CA480126 /* SentryBootstrap.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SentryBootstrap.m; sourceTree = "<group>"; };
 		7DADD61846736B0E638BF012 /* Readest_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Readest_iOS.entitlements; sourceTree = "<group>"; };
+		806FEDFF1D14FC258DA1A7A0 /* MediaPlayer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaPlayer.framework; path = System/Library/Frameworks/MediaPlayer.framework; sourceTree = SDKROOT; };
 		93460D5281B9FD6211B45C72 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		983AD7B7F8D8B9BF527EF05D /* traffic_light.rs */ = {isa = PBXFileReference; path = traffic_light.rs; sourceTree = "<group>"; };
+		9AFF95DFCB4CA01100B8C075 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		9B00698C6D8D59E6093819A0 /* range_file.rs */ = {isa = PBXFileReference; path = range_file.rs; sourceTree = "<group>"; };
 		9B22460180952B7C3F11DE9D /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		9CE7112678AB90D73F62180F /* CarPlaySceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlaySceneDelegate.swift; sourceTree = "<group>"; };
 		A02C074BB1C537B8020DB593 /* system_dictionary.rs */ = {isa = PBXFileReference; path = system_dictionary.rs; sourceTree = "<group>"; };
 		A37E99A73D229E08C8B46AEB /* epub_parser.rs */ = {isa = PBXFileReference; path = epub_parser.rs; sourceTree = "<group>"; };
+		A6F7D4232EC1A743CA6CB256 /* CarPlayBootstrap.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = CarPlayBootstrap.m; sourceTree = "<group>"; };
 		A7318D4877A991A1DAB79861 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		A77628B94260724841CB0C1F /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		AA9882F143239C0055D58746 /* spawn_fresh_browser.rs */ = {isa = PBXFileReference; path = spawn_fresh_browser.rs; sourceTree = "<group>"; };
@@ -119,6 +130,7 @@
 		E4CB13FE16F5D99107B056A7 /* ReadingWidgetProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingWidgetProvider.swift; sourceTree = "<group>"; };
 		E5F4A6E57CB4895FFFBC2DE8 /* ShareExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		EF6CC501CA70CA9BBEA6F3D9 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		F7F1EE1A41EFDFC53AA8AC46 /* CarPlay.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CarPlay.framework; path = System/Library/Frameworks/CarPlay.framework; sourceTree = SDKROOT; };
 		FB09AA381EE87AED8151864C /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		FF84C225AF4E94849713D59C /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -138,6 +150,8 @@
 				D608DE39BD2F9FA892508F37 /* UIKit.framework in Frameworks */,
 				1F65F6BB7F9A5D5B84F5AC1E /* WebKit.framework in Frameworks */,
 				09CC5CA1145D579F4A35BA86 /* WidgetKit.framework in Frameworks */,
+				AAF9140CE4DCCB761DD7E52C /* CarPlay.framework in Frameworks */,
+				77DEFFF81AE57C6577265ADF /* MediaPlayer.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -182,6 +196,14 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		245AF1EF44095ADF8D1AE58A /* debug */ = {
+			isa = PBXGroup;
+			children = (
+				9AFF95DFCB4CA01100B8C075 /* libapp.a */,
+			);
+			path = debug;
+			sourceTree = "<group>";
+		};
 		2D6F041DFA6B062224902B98 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -204,6 +226,7 @@
 		2FB21E2BD03D75C169D20A5E /* arm64 */ = {
 			isa = PBXGroup;
 			children = (
+				245AF1EF44095ADF8D1AE58A /* debug */,
 				3E60E9E90FC306D4F0F35FDF /* release */,
 			);
 			path = arm64;
@@ -219,6 +242,7 @@
 				0F0D4492F8DDE94F4DC4854F /* safari_auth.rs */,
 				A02C074BB1C537B8020DB593 /* system_dictionary.rs */,
 				983AD7B7F8D8B9BF527EF05D /* traffic_light.rs */,
+				1351267D2F44D28DE9E60E70 /* window.rs */,
 			);
 			path = macos;
 			sourceTree = "<group>";
@@ -277,6 +301,7 @@
 			isa = PBXGroup;
 			children = (
 				C1EACF94D1026C7A51CD0A63 /* AppGroupBridge.swift */,
+				49682FE37CE0A63C42BE1590 /* GetPageContent.js */,
 				27B7FEAE989ABFF6C8FF0F77 /* Info.plist */,
 				4924DDD171577C52C0C5809E /* ShareExtension.entitlements */,
 				CB595336F6275E2B879AF397 /* ShareViewController.swift */,
@@ -288,6 +313,8 @@
 			isa = PBXGroup;
 			children = (
 				1F45B5B458F63D98B6113A19 /* Info.plist */,
+				A6F7D4232EC1A743CA6CB256 /* CarPlayBootstrap.m */,
+				9CE7112678AB90D73F62180F /* CarPlaySceneDelegate.swift */,
 				7DADD61846736B0E638BF012 /* Readest_iOS.entitlements */,
 			);
 			path = Readest_iOS;
@@ -304,8 +331,10 @@
 		C5040CC68EE16BB47F46BFEB /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				F7F1EE1A41EFDFC53AA8AC46 /* CarPlay.framework */,
 				57535F4C21FEA405C0A45945 /* CoreGraphics.framework */,
 				576303E7E1596790E0DEF8DC /* libapp.a */,
+				806FEDFF1D14FC258DA1A7A0 /* MediaPlayer.framework */,
 				1C29EFE86C85351F81C99F2A /* Metal.framework */,
 				5D765B7634BFC9B2D619B82E /* MetalKit.framework */,
 				A77628B94260724841CB0C1F /* QuartzCore.framework */,
@@ -342,7 +371,7 @@
 			path = ../../src;
 			sourceTree = "<group>";
 		};
-		"TEMP_2CFDA532-96ED-48EF-8375-82815CD2C1BF" /* x86_64 */ = {
+		"TEMP_2EAFEA11-E7B7-45F1-A585-9CBEC3B276A8" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -381,6 +410,7 @@
 			buildConfigurationList = 34F2EE036FDE625F6654A1DF /* Build configuration list for PBXNativeTarget "ShareExtension" */;
 			buildPhases = (
 				4474D64BA33AEDC957661F2E /* Sources */,
+				55F47F63820813146F1CA05F /* Resources */,
 			);
 			buildRules = (
 			);
@@ -456,6 +486,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		55F47F63820813146F1CA05F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				50A87D22EBF9FCA46AAB9CBE /* GetPageContent.js in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D688C250839BE2493EC2C660 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -497,6 +535,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D8686630072A4D6D59502DF8 /* CarPlayBootstrap.m in Sources */,
+				18653C7427FA61B643FB5927 /* CarPlaySceneDelegate.swift in Sources */,
 				9E79568218100A2569F00CEA /* SentryBootstrap.m in Sources */,
 				A3B9B497F2EC434EEEBA2235 /* main.mm in Sources */,
 			);
@@ -550,7 +590,7 @@
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				INFOPLIST_FILE = ShareExtension/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -596,6 +636,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.mdbraber.readest;
 				PRODUCT_NAME = "Readest";
 				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
 			};
@@ -652,7 +693,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.4;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -694,6 +735,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.mdbraber.readest;
 				PRODUCT_NAME = "Readest";
 				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
 			};
@@ -744,7 +786,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.4;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -767,7 +809,7 @@
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				INFOPLIST_FILE = ReadestWidget/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -795,7 +837,7 @@
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				INFOPLIST_FILE = ShareExtension/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -823,7 +865,7 @@
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				INFOPLIST_FILE = ReadestWidget/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

@@ -19,6 +19,7 @@ import { useKeyDownActions } from '@/hooks/useKeyDownActions';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { isReadestCloudStorageActive } from '@/services/sync/cloudSyncProvider';
+import { isFeedBook } from '@/services/rss/feedBookUrl';
 import {
   TransferItem,
   TransferStatus,
@@ -186,16 +187,22 @@ const TransferQueuePanel: React.FC = () => {
   const onClose = () => setIsOpen(false);
   const divRef = useKeyDownActions({ onCancel: onClose, onConfirm: onClose });
 
-  // Uploads target Readest Cloud storage; while a third-party provider is
-  // selected the queue refuses book uploads, so hide the affordance
-  // (downloads and replica transfers keep flowing regardless).
+  // Both bulk actions target Readest Cloud storage; while a third-party provider
+  // is selected the queue refuses book uploads and a queued download would ask
+  // Readest storage for a file that only exists on the provider, so hide both
+  // affordances (per-book Upload / Download in the shelf are provider-routed, and
+  // replica transfers keep flowing regardless).
   const settings = useSettingsStore((s) => s.settings);
   const readestStorageActive = isReadestCloudStorageActive(settings);
 
-  const booksToUpload = getVisibleLibrary().filter((book) => book.downloadedAt && !book.uploadedAt);
-  const booksToDownload = getVisibleLibrary().filter(
-    (book) => book.uploadedAt && !book.downloadedAt,
+  // Feed books are fileless (#5307): sweeping them into "Upload All" only fills
+  // the queue with transfers that can never resolve a source.
+  const booksToUpload = getVisibleLibrary().filter(
+    (book) => book.downloadedAt && !book.uploadedAt && !isFeedBook(book),
   );
+  const booksToDownload = readestStorageActive
+    ? getVisibleLibrary().filter((book) => book.uploadedAt && !book.downloadedAt)
+    : [];
 
   const handleUploadAll = () => {
     booksToUpload.forEach((book) => queueUpload(book));

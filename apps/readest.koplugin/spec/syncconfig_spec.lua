@@ -1,151 +1,184 @@
 -- syncconfig_spec.lua
--- Tests for readest_syncconfig.lua's single progress watermark
--- (progress_sig + progress_updated_at_value = "the position we're synced to and
--- when it was authored"). It is advanced on a real local move (push side) and on
--- adopting a server position (pull side), mirroring the web's lastSyncedProgressTs.
--- progressUpdatedAt must only advance to "now" on a genuine move so an idle
--- device cannot clobber a newer position from another device.
+-- Tests for SyncConfig's metadata hash — the cross-device book fingerprint
+-- that must stay CONSISTENT with Readest's getMetadataHashInfo in
+-- apps/readest-app/src/utils/book.ts. The hash-source fixtures here mirror
+-- src/__tests__/utils/metadata-hash-info.test.ts: same inputs must produce
+-- the same "title|authors|identifiers[|pdf-filename]" string on both sides,
+-- because md5 of that string is the fleet-wide book identity.
+--
+-- Expected hashes are computed through the same (stubbed) ffi/sha2 module the
+-- production code holds, so assertions pin the exact hash INPUT — md5 itself
+-- is identical in both languages.
 
-local spec_helper = require("spec_helper")
+require("spec_helper")
+require("spec.koreader_stubs")
 
--- KOReader modules pulled at require-time by readest_syncconfig.
-package.preload["ui/event"] = function()
-    return { new = function() return {} end }
-end
-package.preload["ui/widget/infomessage"] = function()
-    return { new = function() return {} end }
-end
-package.preload["ui/uimanager"] = function()
-    return { show = function() end }
-end
-package.preload["util"] = function()
-    return {}
-end
-package.preload["ffi/sha2"] = function()
-    return { md5 = function() return "hash" end }
-end
-package.preload["readest_i18n"] = function()
-    return function(s) return s end
+local SyncConfig = require("readest_syncconfig")
+local sha2 = require("ffi/sha2")
+
+-- Minimal ui fake: doc_settings backed by a plain table, so getMetaHash's
+-- cache writes are observable.
+local function fakeUI(o)
+    o = o or {}
+    local values = {
+        doc_props = o.doc_props or {},
+        doc_path = o.doc_path,
+        partial_md5_checksum = o.checksum,
+        readest_sync = o.readest_sync,
+    }
+    return {
+        doc_settings = {
+            readSetting = function(_, k) return values[k] end,
+            saveSetting = function(_, k, v) values[k] = v end,
+        },
+        _values = values,
+    }
 end
 
-describe("readest_syncconfig progress watermark", function()
-    local SyncConfig
-    -- Timestamps are ISO strings end-to-end (matches the DB + the server's
-    -- new Date(...) acceptance); the helpers are representation-agnostic.
-    local NOW = "2026-06-30T12:00:00.000Z"
+local function fakeStore(rows)
+    return {
+        _getRowRaw = function(_, hash) return rows[hash] end,
+    }
+end
 
-    before_each(function()
-        spec_helper.reset()
-        package.loaded["readest_syncconfig"] = nil
-        SyncConfig = require("readest_syncconfig")
+describe("SyncConfig:getMetadataHashInfo", function()
+    it("builds the same hash source as Readest for a plain book", function()
+        local ui = fakeUI({
+            doc_props = {
+                title = "The Great Gatsby",
+                authors = "F. Scott Fitzgerald",
+                identifiers = "9780743273565",
+            },
+            doc_path = "/books/gatsby.epub",
+        })
+        local info = SyncConfig:getMetadataHashInfo(ui)
+        assert.are.equal("The Great Gatsby|F. Scott Fitzgerald|9780743273565", info.hash_source)
+        assert.are.equal(sha2.md5("The Great Gatsby|F. Scott Fitzgerald|9780743273565"),
+            info.meta_hash)
     end)
 
-    describe("resolveProgressUpdatedAt", function()
-        it("authors 'now' for a brand-new position", function()
-            local drs = {}
-            local v = SyncConfig:resolveProgressUpdatedAt(drs, "p:3", NOW)
-            assert.are.equal(NOW, v)
-            assert.are.equal("p:3", drs.progress_sig)
-            assert.are.equal(NOW, drs.progress_updated_at_value)
-        end)
-
-        it("carries the watermark when the position is unchanged", function()
-            local stored = "2026-06-29T08:00:00.000Z"
-            local drs = { progress_sig = "p:5", progress_updated_at_value = stored }
-            assert.are.equal(stored, SyncConfig:resolveProgressUpdatedAt(drs, "p:5", NOW))
-        end)
-
-        it("authors 'now' on a real move to a new position", function()
-            local drs = { progress_sig = "p:5", progress_updated_at_value = "2026-06-29T08:00:00.000Z" }
-            assert.are.equal(NOW, SyncConfig:resolveProgressUpdatedAt(drs, "p:6", NOW))
-            assert.are.equal("p:6", drs.progress_sig)
-        end)
+    it("salts PDF hashes with the base filename (issue #5411)", function()
+        local props = { title = "PowerPoint Presentation", authors = "Alice Author" }
+        local pdf = SyncConfig:getMetadataHashInfo(fakeUI({
+            doc_props = props, doc_path = "/books/lecture-01.pdf",
+        }))
+        assert.are.equal("PowerPoint Presentation|Alice Author||lecture-01", pdf.hash_source)
     end)
 
-    describe("isServerNewer", function()
-        it("lets the server win when we have no claim", function()
-            assert.is_true(SyncConfig:isServerNewer(nil, "2026-06-30T10:00:00.000Z"))
-        end)
-        it("is true when the server position was authored later", function()
-            assert.is_true(SyncConfig:isServerNewer(
-                "2026-06-30T09:00:00.000Z", "2026-06-30T10:00:00.000Z"))
-        end)
-        it("is false when ours is the same or newer", function()
-            assert.is_false(SyncConfig:isServerNewer(
-                "2026-06-30T10:00:00.000Z", "2026-06-30T10:00:00.000Z"))
-            assert.is_false(SyncConfig:isServerNewer(
-                "2026-06-30T11:00:00.000Z", "2026-06-30T10:00:00.000Z"))
-        end)
+    it("does not salt non-PDF formats", function()
+        local props = { title = "PowerPoint Presentation", authors = "Alice Author" }
+        local epub = SyncConfig:getMetadataHashInfo(fakeUI({
+            doc_props = props, doc_path = "/books/lecture-01.epub",
+        }))
+        assert.are.equal("PowerPoint Presentation|Alice Author|", epub.hash_source)
     end)
 
-    describe("syncedAuthoredAt", function()
-        it("returns the watermark value when it matches the current position", function()
-            local drs = { progress_sig = "p:7", progress_updated_at_value = "T7" }
-            assert.are.equal("T7", SyncConfig:syncedAuthoredAt(drs, "p:7"))
-        end)
-        it("returns nil when the watermark is for a different position", function()
-            local drs = { progress_sig = "p:7", progress_updated_at_value = "T7" }
-            assert.is_nil(SyncConfig:syncedAuthoredAt(drs, "p:8"))
-        end)
+    it("gives distinct PDFs with identical metadata distinct hashes", function()
+        local props = { title = "PowerPoint Presentation", authors = "Alice Author" }
+        local a = SyncConfig:getMetadataHashInfo(fakeUI({
+            doc_props = props, doc_path = "/books/lecture-01.pdf",
+        }))
+        local b = SyncConfig:getMetadataHashInfo(fakeUI({
+            doc_props = props, doc_path = "/books/lecture-02.pdf",
+        }))
+        assert.are_not.equal(a.meta_hash, b.meta_hash)
     end)
 
-    -- End-to-end behaviour expressed through the pure helpers + a doc-local drs
-    -- table, simulating the pull→push sequence the ReaderUI drives.
-    describe("scenarios", function()
-        it("an unmoved device inherits the server's authored-at (no clobber)", function()
-            -- Open at page 1; pull sees the server also at page 1 @ T0. We have no
-            -- prior watermark, so the server wins the decision, we're already at its
-            -- position (no navigation), and we adopt its authored-at.
-            local drs = {}
-            local server_sig, server_prog = "p:1", "2026-06-30T08:00:00.000Z"
-            local my_prog = SyncConfig:syncedAuthoredAt(drs, "p:1")
-            assert.is_true(SyncConfig:isServerNewer(my_prog, server_prog))
-            SyncConfig:setSyncedPosition(drs, server_sig, server_prog) -- adopt (already there)
-            -- Another device now advances to page 10; we never move, then push on close.
-            -- The push reports the inherited T0, NOT now → server keeps page 10.
-            assert.are.equal(server_prog, SyncConfig:resolveProgressUpdatedAt(drs, "p:1", NOW))
-        end)
+    it("keeps the salt when the title already fell back to the filename", function()
+        -- Readest hashes "report||" + "|report" for a metadata-less PDF: the
+        -- title fallback happens before hashing, then the salt is appended
+        -- regardless. Same double appearance here.
+        local info = SyncConfig:getMetadataHashInfo(fakeUI({
+            doc_props = {}, doc_path = "/books/report.pdf",
+        }))
+        assert.are.equal("report|||report", info.hash_source)
+    end)
 
-        it("after adopting a newer server position, a later push inherits its time", function()
-            -- We sit at page 1 (authored T1). Pull sees server page 10 @ T10.
-            local drs = { progress_sig = "p:1", progress_updated_at_value = "2026-06-30T01:00:00.000Z" }
-            local server_sig, server_prog = "p:10", "2026-06-30T10:00:00.000Z"
-            assert.is_true(SyncConfig:isServerNewer(
-                SyncConfig:syncedAuthoredAt(drs, "p:1"), server_prog))
-            SyncConfig:setSyncedPosition(drs, server_sig, server_prog) -- navigated to p:10
-            -- Push at the adopted position carries the server's authored-at.
-            assert.are.equal(server_prog, SyncConfig:resolveProgressUpdatedAt(drs, "p:10", NOW))
-            -- A genuine move past it authors 'now'.
-            assert.are.equal(NOW, SyncConfig:resolveProgressUpdatedAt(drs, "p:11", NOW))
-        end)
+    it("prefers uuid over other identifier schemes regardless of order", function()
+        -- Readest's getPreferredIdentifier walks schemes in priority order
+        -- (uuid > calibre > isbn); the identifier listing order must not
+        -- change the winner.
+        local first = SyncConfig:getMetadataHashInfo(fakeUI({
+            doc_props = { title = "T", identifiers = "urn:uuid:abc\ncalibre:99" },
+            doc_path = "/books/t.epub",
+        }))
+        local second = SyncConfig:getMetadataHashInfo(fakeUI({
+            doc_props = { title = "T", identifiers = "calibre:99\nurn:uuid:abc" },
+            doc_path = "/books/t.epub",
+        }))
+        assert.are.same({ "abc" }, first.identifiers)
+        assert.are.same({ "abc" }, second.identifiers)
+    end)
+end)
 
-        it("does not re-adopt the server position once synced (no churn)", function()
-            -- Synced to page 10 @ T10; the server row was merely touched (updated_at
-            -- bumped) but progress_updated_at is unchanged. We must not re-adopt.
-            local drs = { progress_sig = "p:10", progress_updated_at_value = "2026-06-30T10:00:00.000Z" }
-            local my_prog = SyncConfig:syncedAuthoredAt(drs, "p:10")
-            assert.is_false(SyncConfig:isServerNewer(my_prog, "2026-06-30T10:00:00.000Z"))
-        end)
+describe("SyncConfig:getMetaHash", function()
+    it("prefers the library store's synced meta_hash over local computation", function()
+        -- The value stamped when the book entered the fleet is authoritative
+        -- (Readest never recomputes it after import — the PDF filename salt
+        -- is unrecoverable). A pulled row must beat anything computed here.
+        local ui = fakeUI({
+            doc_props = { title = "Dune" },
+            doc_path = "/books/dune.pdf",
+            checksum = "b1",
+        })
+        local store = fakeStore({ b1 = { meta_hash = "cloud-stamped" } })
+        assert.are.equal("cloud-stamped", SyncConfig:getMetaHash(ui, store))
+        -- Cached so annotation flows reading meta_hash_v1 directly agree.
+        assert.are.equal("cloud-stamped", ui._values.readest_sync.meta_hash_v1)
+    end)
 
-        it("a resume-pull that started first wins over a concurrent local move", function()
-            -- Resume at page 1 (no prior watermark). The pull starts and snapshots
-            -- the local state: start_sig=p:1, start_prog=nil. The server holds a
-            -- newer page 50 @ T10 (authored on another device).
-            local drs = {}
-            local start_sig = "p:1"
-            local start_prog = SyncConfig:syncedAuthoredAt(drs, start_sig) -- nil
-            local server_prog = "2026-06-30T10:00:00.000Z"
+    it("replaces a stale locally-computed cache with the synced value", function()
+        local ui = fakeUI({
+            doc_props = { title = "Dune" },
+            doc_path = "/books/dune.pdf",
+            checksum = "b1",
+            readest_sync = { meta_hash_v1 = "old-local" },
+        })
+        local store = fakeStore({ b1 = { meta_hash = "cloud-stamped" } })
+        assert.are.equal("cloud-stamped", SyncConfig:getMetaHash(ui, store))
+        assert.are.equal("cloud-stamped", ui._values.readest_sync.meta_hash_v1)
+    end)
 
-            -- While the pull is in flight, the user turns a page; auto_sync's push
-            -- advances the watermark to p:2 authored 'now' (newer than the server).
-            SyncConfig:resolveProgressUpdatedAt(drs, "p:2", NOW)
+    it("falls back to the cached hash when the store has no row", function()
+        local ui = fakeUI({
+            doc_props = { title = "Dune" },
+            doc_path = "/books/dune.pdf",
+            checksum = "b1",
+            readest_sync = { meta_hash_v1 = "cached" },
+        })
+        assert.are.equal("cached", SyncConfig:getMetaHash(ui, fakeStore({})))
+    end)
 
-            -- Deciding from the LIVE watermark would now flip to "local is newer"
-            -- and drop the pull...
-            assert.is_false(SyncConfig:isServerNewer(
-                SyncConfig:syncedAuthoredAt(drs, "p:2"), server_prog))
-            -- ...but the frozen request-start snapshot still lets the server win.
-            assert.is_true(SyncConfig:isServerNewer(start_prog, server_prog))
-        end)
+    it("computes and caches when neither store nor cache has a value", function()
+        local ui = fakeUI({
+            doc_props = { title = "Dune" },
+            doc_path = "/books/dune.epub",
+            checksum = "b1",
+        })
+        assert.are.equal(sha2.md5("Dune||"), SyncConfig:getMetaHash(ui, fakeStore({})))
+        assert.are.equal(sha2.md5("Dune||"), ui._values.readest_sync.meta_hash_v1)
+    end)
+
+    it("ignores an empty meta_hash on the store row", function()
+        local ui = fakeUI({
+            doc_props = { title = "Dune" },
+            doc_path = "/books/dune.epub",
+            checksum = "b1",
+        })
+        local store = fakeStore({ b1 = { meta_hash = "" } })
+        assert.are.equal(sha2.md5("Dune||"), SyncConfig:getMetaHash(ui, store))
+    end)
+end)
+
+describe("SyncConfig delayed responses", function()
+    it("ignores a reading-position response after closing the document", function()
+        local ui = fakeUI()
+        ui.document = {}
+        local response
+        local client = {pullChanges = function(_, _, cb) response = cb end}
+        SyncConfig:pull(ui, {}, client, "book", "meta", false)
+        ui.document = nil
+        response(true, {configs = {}})
+        assert.is_nil(ui._values.readest_sync)
     end)
 end)

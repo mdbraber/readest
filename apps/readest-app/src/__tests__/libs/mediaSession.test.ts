@@ -16,8 +16,13 @@ vi.mock('@tauri-apps/api/core', () => ({
   addPluginListener: vi.fn(),
 }));
 
-import { invoke } from '@tauri-apps/api/core';
-import { getMediaSession, TauriMediaSession } from '@/libs/mediaSession';
+import { invoke, addPluginListener, type PluginListener } from '@tauri-apps/api/core';
+import {
+  getMediaSession,
+  IOSCompositeMediaSession,
+  TauriMediaSession,
+  type MediaSessionState,
+} from '@/libs/mediaSession';
 import { getOSPlatform } from '@/utils/misc';
 import { isTauriAppPlatform } from '@/services/environment';
 
@@ -41,14 +46,32 @@ describe('getMediaSession', () => {
     setNavigatorMediaSession(false);
   });
 
-  test('uses navigator.mediaSession on iOS, NOT the native plugin', () => {
-    // iOS audio plays through the WebView (Edge TTS media element, or the silent
-    // keep-alive element during system TTS), so navigator.mediaSession is what
-    // surfaces the lock-screen cover + sentence + controls. Routing iOS through
-    // the native plugin hid the Edge cover/sentence and gave system TTS no
-    // controls (AVSpeechSynthesizer can't be surfaced that way). See #4676.
+  test('returns the composite session on iOS Tauri (native + WebKit mirror)', () => {
+    // iOS runs TWO now-playing clients: the native MPNowPlayingInfoCenter one
+    // (plugin-driven) and WebKit's page client, which exists because the page
+    // declares audioSession type 'playback' for WebAudio. Elections can pick
+    // either; an unfed WebKit client renders a bare "localhost" card with
+    // dead buttons. The composite feeds both.
     vi.mocked(getOSPlatform).mockReturnValue('ios');
     vi.mocked(isTauriAppPlatform).mockReturnValue(true);
+    setNavigatorMediaSession(true);
+
+    expect(getMediaSession()).toBeInstanceOf(IOSCompositeMediaSession);
+  });
+
+  test('returns the plain TauriMediaSession on iOS Tauri without navigator.mediaSession', () => {
+    vi.mocked(getOSPlatform).mockReturnValue('ios');
+    vi.mocked(isTauriAppPlatform).mockReturnValue(true);
+    setNavigatorMediaSession(false);
+
+    const session = getMediaSession();
+    expect(session).toBeInstanceOf(TauriMediaSession);
+    expect(session).not.toBeInstanceOf(IOSCompositeMediaSession);
+  });
+
+  test('uses navigator.mediaSession on iOS web (non-Tauri)', () => {
+    vi.mocked(getOSPlatform).mockReturnValue('ios');
+    vi.mocked(isTauriAppPlatform).mockReturnValue(false);
     setNavigatorMediaSession(true);
 
     const result = getMediaSession();
@@ -90,6 +113,30 @@ describe('TauriMediaSession.setActive', () => {
     vi.clearAllMocks();
   });
 
+  test('registers transport listeners before notification permission settles', async () => {
+    let releasePermission!: () => void;
+    vi.mocked(addPluginListener).mockResolvedValue({
+      unregister: vi.fn(),
+    } as unknown as PluginListener);
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'plugin:native-tts|checkPermissions') {
+        await new Promise<void>((resolve) => {
+          releasePermission = resolve;
+        });
+        return { postNotification: 'granted' } as unknown;
+      }
+      return undefined as unknown;
+    });
+
+    const session = new TauriMediaSession();
+    const activation = session.setActive({ active: true, sessionId: 'book-1' });
+
+    await vi.waitFor(() => expect(releasePermission).toBeTypeOf('function'));
+    expect(addPluginListener).toHaveBeenCalled();
+    releasePermission();
+    await activation;
+  });
+
   test('requests POST_NOTIFICATIONS whenever the session activates', async () => {
     // The foreground-service media notification IS the lock-screen control; on
     // Android 13+ it is silently suppressed unless POST_NOTIFICATIONS is
@@ -109,6 +156,63 @@ describe('TauriMediaSession.setActive', () => {
     expect(invoke).toHaveBeenCalledWith('plugin:native-tts|requestPermissions', {
       permissions: ['postNotification'],
     });
+  });
+
+  test('resolves and keeps wiring listeners when the native activation fails', async () => {
+    // TTSMediaBridge calls this as `void bind(...)`, so a rejection here is an
+    // unhandled rejection AND skips action-handler registration, leaving the
+    // session with no transport controls at all. Starting the foreground
+    // service can legitimately fail (ForegroundServiceStartNotAllowedException
+    // while backgrounded); degrade rather than throw.
+    const unregister = vi.fn();
+    vi.mocked(addPluginListener).mockResolvedValue({
+      unregister,
+    } as unknown as PluginListener);
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'plugin:native-tts|set_media_session_active') {
+        throw new Error('ForegroundServiceStartNotAllowedException');
+      }
+      if (cmd === 'plugin:native-tts|checkPermissions') {
+        return { postNotification: 'granted' } as unknown;
+      }
+      return undefined as unknown;
+    });
+
+    const session = new TauriMediaSession();
+    await expect(session.setActive({ active: true, sessionId: 'book-1' })).resolves.toBeUndefined();
+    expect(addPluginListener).toHaveBeenCalled();
+  });
+
+  test('unregisters the partial set when listener registration fails midway', async () => {
+    // Listeners are only published to `eventListeners` once the whole sequence
+    // succeeds, so the ones registered before a failure were unreachable and
+    // leaked, and `eventListenerInited` stayed true, blocking any retry.
+    const unregister = vi.fn();
+    let registrations = 0;
+    vi.mocked(addPluginListener).mockImplementation(async () => {
+      registrations += 1;
+      if (registrations === 3) throw new Error('plugin channel closed');
+      return { unregister } as unknown as PluginListener;
+    });
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'plugin:native-tts|checkPermissions') {
+        return { postNotification: 'granted' } as unknown;
+      }
+      return undefined as unknown;
+    });
+
+    const session = new TauriMediaSession();
+    await session.setActive({ active: true, sessionId: 'book-1' });
+
+    // The two that did register are cleaned up rather than orphaned.
+    expect(unregister).toHaveBeenCalledTimes(2);
+
+    // ...and the session is still retryable: a later activation registers again
+    // instead of short-circuiting on a stale "already initialized" flag.
+    vi.mocked(addPluginListener).mockResolvedValue({ unregister } as unknown as PluginListener);
+    const before = vi.mocked(addPluginListener).mock.calls.length;
+    await session.setActive({ active: true, sessionId: 'book-2' });
+    expect(vi.mocked(addPluginListener).mock.calls.length).toBeGreaterThan(before);
   });
 
   test('still activates the native session when the permission request throws', async () => {
@@ -146,5 +250,251 @@ describe('TauriMediaSession.setActive', () => {
       'plugin:native-tts|requestPermissions',
       expect.anything(),
     );
+  });
+
+  test('tags native updates and teardown with the active playback session', async () => {
+    const unregister = vi.fn();
+    vi.mocked(addPluginListener).mockResolvedValue({ unregister } as unknown as PluginListener);
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'plugin:native-tts|checkPermissions') {
+        return { postNotification: 'granted' } as unknown;
+      }
+      return undefined as unknown;
+    });
+
+    const session = new TauriMediaSession();
+    await session.setActive({ active: true, sessionId: 'book-session' });
+    await session.updateMetadata({ title: 'New book' });
+    await session.updatePlaybackState({ playing: true });
+    await session.setActive({ active: false });
+
+    expect(invoke).toHaveBeenCalledWith('plugin:native-tts|update_media_session_metadata', {
+      payload: { title: 'New book', sessionId: 'book-session' },
+    });
+    expect(invoke).toHaveBeenCalledWith('plugin:native-tts|update_media_session_state', {
+      payload: { playing: true, sessionId: 'book-session' },
+    });
+    expect(invoke).toHaveBeenCalledWith('plugin:native-tts|set_media_session_active', {
+      payload: { active: false, sessionId: 'book-session' },
+    });
+  });
+
+  test('a stale teardown cannot unregister replacement session listeners', async () => {
+    const oldUnregisters: ReturnType<typeof vi.fn>[] = [];
+    const newUnregisters: ReturnType<typeof vi.fn>[] = [];
+    let listenerCount = 0;
+    vi.mocked(addPluginListener).mockImplementation(async () => {
+      const unregister = vi.fn().mockResolvedValue(undefined);
+      (listenerCount++ < 8 ? oldUnregisters : newUnregisters).push(unregister);
+      return { unregister } as unknown as PluginListener;
+    });
+
+    let releaseOldTeardown!: () => void;
+    let reportOldTeardown!: () => void;
+    const oldTeardownStarted = new Promise<void>((resolve) => {
+      reportOldTeardown = resolve;
+    });
+    vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === 'plugin:native-tts|checkPermissions') {
+        return { postNotification: 'granted' } as unknown;
+      }
+      const payload = (args as { payload?: MediaSessionState } | undefined)?.payload;
+      if (cmd === 'plugin:native-tts|set_media_session_active' && payload?.active === false) {
+        reportOldTeardown();
+        await new Promise<void>((resolve) => {
+          releaseOldTeardown = resolve;
+        });
+      }
+      return undefined as unknown;
+    });
+
+    const session = new TauriMediaSession();
+    await session.setActive({ active: true, sessionId: 'old-session' });
+    const staleTeardown = session.setActive({ active: false, sessionId: 'old-session' });
+    await oldTeardownStarted;
+    await session.setActive({ active: true, sessionId: 'new-session' });
+    releaseOldTeardown();
+    await staleTeardown;
+    await session.updateMetadata({ title: 'Replacement' });
+
+    expect(oldUnregisters).toHaveLength(8);
+    expect(oldUnregisters.every((unregister) => unregister.mock.calls.length === 1)).toBe(true);
+    expect(newUnregisters).toHaveLength(8);
+    expect(newUnregisters.every((unregister) => unregister.mock.calls.length === 0)).toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith('plugin:native-tts|update_media_session_metadata', {
+      payload: { title: 'Replacement', sessionId: 'new-session' },
+    });
+  });
+});
+
+describe('TauriMediaSession media-session-seek', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test('routes the native seek payload to the seekto handler', async () => {
+    // addPluginListener delivers the native payload DIRECTLY (like the
+    // native-bridge shared-intent listener), not wrapped in { payload }. The
+    // seek listener used to read `event.payload.position`, which threw, so
+    // lock-screen / Android Auto seeks silently did nothing while in-app seeks
+    // (which call the controller directly) worked. Guard the payload shape.
+    const listeners: Record<string, (payload: unknown) => void> = {};
+    vi.mocked(addPluginListener).mockImplementation((async (
+      _plugin: string,
+      event: string,
+      cb: (payload: unknown) => void,
+    ) => {
+      listeners[event] = cb;
+      return { unregister: vi.fn() } as unknown as PluginListener;
+    }) as unknown as typeof addPluginListener);
+    vi.mocked(invoke).mockResolvedValue({ postNotification: 'granted' } as unknown);
+
+    const session = new TauriMediaSession();
+    const seekHandler = vi.fn();
+    session.setActionHandler('seekto', seekHandler as (position: number) => void);
+    await session.setActive({ active: true });
+
+    // Native fires the payload directly: { position }.
+    listeners['media-session-seek']!({ position: 42000 });
+    expect(seekHandler).toHaveBeenCalledWith(42000);
+  });
+});
+
+describe('IOSCompositeMediaSession', () => {
+  interface FakeWebSession {
+    metadata: unknown;
+    playbackState: string;
+    setActionHandler: ReturnType<typeof vi.fn>;
+    setPositionState: ReturnType<typeof vi.fn>;
+  }
+
+  const makeWebSession = (): FakeWebSession => ({
+    metadata: null,
+    playbackState: 'none',
+    setActionHandler: vi.fn(),
+    setPositionState: vi.fn(),
+  });
+
+  class FakeMediaMetadata {
+    title: string;
+    artist: string;
+    album: string;
+    artwork: { src: string; type?: string }[];
+    constructor(init: {
+      title: string;
+      artist: string;
+      album: string;
+      artwork: { src: string; type?: string }[];
+    }) {
+      this.title = init.title;
+      this.artist = init.artist;
+      this.album = init.album;
+      this.artwork = init.artwork;
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('MediaMetadata', FakeMediaMetadata);
+    vi.mocked(invoke).mockResolvedValue(undefined as unknown);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test('mirrors metadata (with artwork MIME) into navigator.mediaSession', async () => {
+    const web = makeWebSession();
+    const session = new IOSCompositeMediaSession(web as unknown as MediaSession);
+    await session.updateMetadata({
+      title: 'T',
+      artist: 'A',
+      album: 'B',
+      artwork: 'data:image/jpeg;base64,x',
+    });
+    const metadata = web.metadata as FakeMediaMetadata;
+    expect(metadata.title).toBe('T');
+    // WebKit silently drops MIME-mismatched artwork; the type must be sniffed
+    // from the data URL, not assumed.
+    expect(metadata.artwork[0]!.type).toBe('image/jpeg');
+    // The native surface is still fed too.
+    expect(invoke).toHaveBeenCalledWith(
+      'plugin:native-tts|update_media_session_metadata',
+      expect.anything(),
+    );
+  });
+
+  test('mirrors playback state and position into navigator.mediaSession', async () => {
+    const web = makeWebSession();
+    const session = new IOSCompositeMediaSession(web as unknown as MediaSession);
+    await session.updatePlaybackState({ playing: true, position: 5000, duration: 10000 });
+    expect(web.playbackState).toBe('playing');
+    expect(web.setPositionState).toHaveBeenCalledWith({
+      duration: 10,
+      position: 5,
+      playbackRate: 1,
+    });
+    await session.updatePlaybackState({ playing: false, position: 6000, duration: 10000 });
+    expect(web.playbackState).toBe('paused');
+  });
+
+  test('mirrors handlers, converts seekto seconds to ms, and skips toggle', () => {
+    const web = makeWebSession();
+    const session = new IOSCompositeMediaSession(web as unknown as MediaSession);
+
+    const play = vi.fn();
+    session.setActionHandler('play', play);
+    const playReg = web.setActionHandler.mock.calls.find((c) => c[0] === 'play')![1];
+    playReg({});
+    expect(play).toHaveBeenCalled();
+
+    const seek = vi.fn();
+    session.setActionHandler('seekto', seek as (position: number) => void);
+    const seekReg = web.setActionHandler.mock.calls.find((c) => c[0] === 'seekto')![1];
+    seekReg({ seekTime: 42 });
+    expect(seek).toHaveBeenCalledWith(42000);
+
+    session.setActionHandler('toggle', vi.fn());
+    expect(web.setActionHandler.mock.calls.find((c) => c[0] === 'toggle')).toBeUndefined();
+  });
+
+  test('deactivation clears the web surface', async () => {
+    const web = makeWebSession();
+    web.playbackState = 'playing';
+    web.metadata = {};
+    const session = new IOSCompositeMediaSession(web as unknown as MediaSession);
+    await session.setActive({ active: false });
+    expect(web.metadata).toBeNull();
+    expect(web.playbackState).toBe('none');
+  });
+});
+
+describe('TauriMediaSession media-session-toggle', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test('routes the native toggle event to the toggle handler', async () => {
+    // iOS togglePlayPauseCommand (lock-screen center button, headset click)
+    // fires a dedicated toggle event: 'play'/'pause' are directional so that
+    // audio-focus events (interruptions, route loss) can reuse them safely.
+    const listeners: Record<string, (payload: unknown) => void> = {};
+    vi.mocked(addPluginListener).mockImplementation((async (
+      _plugin: string,
+      event: string,
+      cb: (payload: unknown) => void,
+    ) => {
+      listeners[event] = cb;
+      return { unregister: vi.fn() } as unknown as PluginListener;
+    }) as unknown as typeof addPluginListener);
+    vi.mocked(invoke).mockResolvedValue({ postNotification: 'granted' } as unknown);
+
+    const session = new TauriMediaSession();
+    const toggleHandler = vi.fn();
+    session.setActionHandler('toggle', toggleHandler);
+    await session.setActive({ active: true });
+
+    listeners['media-session-toggle']!(undefined);
+    expect(toggleHandler).toHaveBeenCalled();
   });
 });

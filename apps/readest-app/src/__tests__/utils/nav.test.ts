@@ -29,7 +29,12 @@ vi.mock('@/services/constants', () => ({
   BOOK_IDS_SEPARATOR: '+',
 }));
 
+vi.mock('@tauri-apps/plugin-os', () => ({
+  version: vi.fn(),
+}));
+
 import { redirect } from 'next/navigation';
+import { version as osVersion } from '@tauri-apps/plugin-os';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { isPWA, isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
@@ -58,6 +63,7 @@ function mockRouter() {
     forward: vi.fn(),
     refresh: vi.fn(),
     prefetch: vi.fn(),
+    bfcacheId: 'test-bfcache-id',
   };
 }
 
@@ -78,6 +84,9 @@ beforeEach(() => {
     label: 'main',
     close: vi.fn(),
   } as unknown as ReturnType<typeof getCurrentWindow>);
+
+  // Reset OS version default (Windows 11 build)
+  vi.mocked(osVersion).mockReturnValue('10.0.22631');
 
   // Reset window.location
   Object.defineProperty(window, 'location', {
@@ -324,13 +333,31 @@ describe('showReaderWindow', () => {
     expect(url).toContain('ids=book1%2Bbook2');
   });
 
+  test('preserves the exact CFI and transient highlight in the reader window URL', () => {
+    const appService = makeAppService();
+    const cfi = 'epubcfi(/6/2!/4/2:1)';
+    showReaderWindow(
+      appService as never,
+      ['book1'],
+      `cfi=${encodeURIComponent(cfi)}&highlight=search`,
+    );
+
+    const url = vi.mocked(WebviewWindow).mock.calls[0]![1]!.url as string;
+    const params = new URLSearchParams(url.split('?')[1]);
+    expect(params.get('ids')).toBe('book1');
+    expect(params.get('cfi')).toBe(cfi);
+    expect(params.get('highlight')).toBe('search');
+  });
+
   test('uses macOS-specific window options', () => {
     const appService = makeAppService(true);
     showReaderWindow(appService as never, ['book1']);
 
     const constructorCall = vi.mocked(WebviewWindow).mock.calls[0]!;
     const options = constructorCall[1]!;
-    expect(options.title).toBe('');
+    // The overlay title bar hides its title text natively, so the window is
+    // named like every other platform's.
+    expect(options.title).toBe('Readest');
     expect(options.decorations).toBe(true);
     expect(options.titleBarStyle).toBe('overlay');
   });
@@ -345,6 +372,29 @@ describe('showReaderWindow', () => {
     expect(options.decorations).toBe(false);
     expect(options.transparent).toBe(true);
     expect(options.shadow).toBe(true);
+  });
+
+  test('drops the shadow on Windows 10, whose border is asymmetric', () => {
+    const appService = makeAppService(false);
+    appService['isWindowsApp'] = true;
+    vi.mocked(osVersion).mockReturnValue('10.0.19045');
+
+    showReaderWindow(appService as never, ['book1']);
+
+    expect(vi.mocked(WebviewWindow).mock.calls[0]![1]!.shadow).toBe(false);
+  });
+
+  test('keeps the shadow on Windows 11 and an unparseable build', () => {
+    const appService = makeAppService(false);
+    appService['isWindowsApp'] = true;
+
+    vi.mocked(osVersion).mockReturnValue('10.0.22631');
+    showReaderWindow(appService as never, ['book1']);
+    expect(vi.mocked(WebviewWindow).mock.calls.at(-1)![1]!.shadow).toBe(true);
+
+    vi.mocked(osVersion).mockReturnValue('10.0');
+    showReaderWindow(appService as never, ['book1']);
+    expect(vi.mocked(WebviewWindow).mock.calls.at(-1)![1]!.shadow).toBe(true);
   });
 });
 

@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { useSettingsStore } from '@/store/settingsStore';
 import { useBookDataStore } from '@/store/bookDataStore';
@@ -34,10 +34,9 @@ const SideBar = ({}) => {
     useSidebarStore();
   const { isSearchBarVisible, setSearchBarVisible } = useSidebarStore();
   const searchNavState = sideBarBookKey ? getSearchNavState(sideBarBookKey) : null;
-  const { searchTerm = '', searchResults = null } = searchNavState || {};
-  const { getBookData } = useBookDataStore();
+  const { searchResults = null } = searchNavState || {};
+  const { getBookData, getConfig } = useBookDataStore();
   const { getView, getViewSettings } = useReaderStore();
-  const searchTermRef = useRef(searchTerm);
   const isMobile = window.innerWidth < 640;
   const [isFullHeightInMobile, setIsFullHeightInMobile] = useState(isMobile);
   const {
@@ -95,10 +94,6 @@ const SideBar = ({}) => {
   }, [isSideBarVisible]);
 
   useEffect(() => {
-    searchTermRef.current = searchTerm;
-  }, [searchTerm]);
-
-  useEffect(() => {
     eventDispatcher.on('search-term', onSearchEvent);
     eventDispatcher.on('navigate', onNavigateEvent);
     return () => {
@@ -147,13 +142,16 @@ const SideBar = ({}) => {
   }, [sideBarBookKey, clearSearch]);
 
   const handleHideSideBar = useCallback(() => {
-    if (searchTermRef.current) {
+    if (isSearchBarVisible) {
       handleHideSearchBar();
-    } else if (!isSideBarPinned) {
-      setSideBarVisible(false);
+      return true;
     }
+    if (!isSideBarVisible) return false;
+    if (isSideBarPinned) return false;
+    setSideBarVisible(false);
+    return true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sideBarBookKey, isSideBarPinned]);
+  }, [sideBarBookKey, isSearchBarVisible, isSideBarPinned, isSideBarVisible]);
 
   useShortcuts({ onShowSearchBar: handleShowSearchBar, onEscape: handleHideSideBar }, [
     handleHideSideBar,
@@ -173,6 +171,9 @@ const SideBar = ({}) => {
   }
   const { book, bookDoc } = bookData;
   const languageDir = getBookDirFromLanguage(bookDoc.metadata.language);
+  // On the annotations tab the header search icon drives the annotation
+  // search in the toolbar instead of the in-book text search.
+  const isAnnotationsTab = getConfig(sideBarBookKey)?.viewSettings?.sideBarTab === 'annotations';
 
   return isSideBarVisible ? (
     <>
@@ -233,7 +234,7 @@ const SideBar = ({}) => {
           onTouchStart={handleHorizontalDragStart}
           onKeyDown={handleDragKeyDown}
         ></div>
-        <div className='flex-shrink-0'>
+        <div className='shrink-0'>
           {isMobile && (
             <div
               role='slider'
@@ -258,11 +259,11 @@ const SideBar = ({}) => {
           />
           <div
             className={clsx('search-bar', {
-              'search-bar-visible': isSearchBarVisible,
+              'search-bar-visible': isSearchBarVisible && !isAnnotationsTab,
             })}
           >
             <SearchBar
-              isVisible={isSearchBarVisible}
+              isVisible={isSearchBarVisible && !isAnnotationsTab}
               bookKey={sideBarBookKey!}
               onHideSearchBar={handleHideSearchBar}
             />
@@ -271,7 +272,7 @@ const SideBar = ({}) => {
             <BookCard book={book} />
           </div>
         </div>
-        {isSearchBarVisible && searchResults ? (
+        {isSearchBarVisible && !isAnnotationsTab && searchResults ? (
           <SearchResults
             bookKey={sideBarBookKey!}
             results={searchResults}

@@ -26,6 +26,27 @@ const migrations: Record<SchemaType, MigrationEntry[]> = {
       `,
     },
   ],
+  'bookorbit-sync': [
+    {
+      name: '2026080401_bookorbit_sync',
+      sql: `
+        CREATE TABLE IF NOT EXISTS bookorbit_note_mappings (
+          book_hash TEXT NOT NULL,
+          note_id TEXT NOT NULL,
+          server_id INTEGER,
+          ko_datetime TEXT NOT NULL,
+          synced_at INTEGER NOT NULL,
+          PRIMARY KEY (book_hash, note_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS bookorbit_book_sync (
+          book_hash TEXT PRIMARY KEY,
+          annotations_synced_at INTEGER NOT NULL DEFAULT 0,
+          bookmarks_synced_at INTEGER NOT NULL DEFAULT 0
+        );
+      `,
+    },
+  ],
   'hardcover-sync': [
     {
       name: '2026032901_hardcover_note_mappings',
@@ -44,6 +65,31 @@ const migrations: Record<SchemaType, MigrationEntry[]> = {
       `,
     },
   ],
+  'notion-sync': [
+    {
+      name: '2026083001_notion_sync_mappings',
+      sql: `
+        CREATE TABLE IF NOT EXISTS notion_book_pages (
+          target_id TEXT NOT NULL,
+          book_hash TEXT NOT NULL,
+          page_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          PRIMARY KEY (target_id, book_hash)
+        );
+
+        CREATE TABLE IF NOT EXISTS notion_note_mappings (
+          target_id TEXT NOT NULL,
+          book_hash TEXT NOT NULL,
+          note_id TEXT NOT NULL,
+          payload_hash TEXT NOT NULL,
+          block_ids TEXT NOT NULL,
+          stale_block_ids TEXT NOT NULL,
+          synced_at INTEGER NOT NULL,
+          PRIMARY KEY (target_id, book_hash, note_id)
+        );
+      `,
+    },
+  ],
   // The embeddings table is created lazily by BookIndexer because its
   // vector32(<dim>) column needs the active embedding model's dim, which
   // isn't known at migration time. Tantivy FTS lives on the chunks.text
@@ -51,6 +97,13 @@ const migrations: Record<SchemaType, MigrationEntry[]> = {
   // rows rather than UPDATE — Tantivy 0.25→0.26 has a known WASM-only
   // UPDATE regression (see fts-tests.ts:306 FIXME). MVP indexing is
   // write-once per book so this is naturally satisfied.
+  //
+  // AMENDED DIRECTION (2026-08-01, see
+  // .agents/plans/2026-08-01-reedy-book-context-foundation.md): chunk FTS is
+  // to be dropped — live-Tantivy inserts measured at ~5.3 s/book at ingest,
+  // and text search now comes from the per-book library-search schema below.
+  // Future Reedy schema keeps embeddings only, with chunks defined as
+  // locator ranges into search_sections.
   statistics: [
     {
       name: '2026061501_statistics_koreader_schema',
@@ -83,7 +136,13 @@ const migrations: Record<SchemaType, MigrationEntry[]> = {
                (SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) t,
                (SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) h;
 
-        CREATE VIEW IF NOT EXISTS page_stat AS
+        -- turso ignores IF NOT EXISTS on CREATE VIEW (READEST-13), so a plain
+        -- CREATE VIEW IF NOT EXISTS still throws "already exists" when the view
+        -- is present (KOReader-imported stats DB, or a partially-applied run).
+        -- DROP first (turso honors DROP VIEW IF EXISTS) to stay idempotent.
+        DROP VIEW IF EXISTS page_stat;
+
+        CREATE VIEW page_stat AS
           SELECT id_book, first_page + idx - 1 AS page, start_time, duration / (last_page - first_page + 1) AS duration
           FROM (
             SELECT id_book, page, total_pages, pages, start_time, duration,
@@ -106,6 +165,48 @@ const migrations: Record<SchemaType, MigrationEntry[]> = {
 
         CREATE TABLE IF NOT EXISTS readest_stat_sync_state (
           key text PRIMARY KEY, value integer NOT NULL DEFAULT 0
+        );
+      `,
+    },
+  ],
+  // Per-book search index/cache: one search.db in each book's directory
+  // (beside cover.png), holding extracted section text so library full-text
+  // search never has to open the book file, unzip it, or parse section DOMs.
+  // `folded` is the case/diacritic-folded text used as a LIKE prefilter; NULL
+  // when folding leaves the text unchanged (typical for CJK) to halve storage.
+  // No Tantivy FTS index: benchmarked (bench/library-search-turso.bench.ts),
+  // at per-book granularity fan-out cost is dominated by DB open, so the
+  // index cannot beat LIKE (~2-3 ms vs ~1.6 ms per book) while costing 2.3x
+  // disk and 7x build time, token semantics cannot serve substring
+  // `contains`, and the ngram variant costs ~10x the text in disk.
+  'library-search': [
+    {
+      name: '2026080101_library_search_sections',
+      sql: `
+        CREATE TABLE IF NOT EXISTS search_meta (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          updated_at INTEGER NOT NULL,
+          version INTEGER NOT NULL,
+          total_sections INTEGER NOT NULL,
+          complete INTEGER NOT NULL DEFAULT 0,
+          nav_hash TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS search_sections (
+          idx INTEGER PRIMARY KEY,
+          label TEXT NOT NULL DEFAULT '',
+          text TEXT NOT NULL,
+          folded TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS search_nodes (
+          node_id INTEGER PRIMARY KEY,
+          parent_id INTEGER,
+          ord INTEGER NOT NULL,
+          depth INTEGER NOT NULL,
+          label TEXT NOT NULL DEFAULT '',
+          section_start INTEGER NOT NULL,
+          section_end INTEGER NOT NULL
         );
       `,
     },

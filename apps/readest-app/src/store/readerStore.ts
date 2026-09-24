@@ -12,13 +12,17 @@ import {
 import { Insets } from '@/types/misc';
 import { EnvConfigType } from '@/services/environment';
 import { FoliateView } from '@/types/view';
+import { isAbsEbook } from '@/utils/audiobook';
 import { DocumentLoader, TOCItem } from '@/libs/document';
 import {
   isPseStreamFileName,
   openPseStreamBook,
   parsePseStreamFileName,
 } from '@/services/opds/pseStream';
-import { BOOK_NAV_VERSION, computeBookNav, hydrateBookNav, updateToc } from '@/services/nav';
+import type { FileSystem } from '@/types/system';
+import { isFeedBookUrl, parseFeedBookUrl } from '@/services/rss/feedBookUrl';
+import { openFeedBookDoc } from '@/services/rss/feedReader';
+import { computeBookNav, hydrateBookNav, isBookNavCacheCurrent, updateToc } from '@/services/nav';
 import { formatTitle, getMetadataHash, getPrimaryLanguage } from '@/utils/book';
 import { getBaseFilename } from '@/utils/path';
 import { SUPPORTED_LANGNAMES } from '@/services/constants';
@@ -27,6 +31,7 @@ import { BookData, useBookDataStore } from './bookDataStore';
 import { useLibraryStore } from './libraryStore';
 import { clearBookProgress, getBookProgress, setBookProgress } from './readerProgressStore';
 import { uniqueId } from '@/utils/misc';
+import { getWidePages, type WidePagesOptions } from '@/utils/spread';
 
 interface ViewState {
   /* Unique key for each book view */
@@ -42,6 +47,9 @@ interface ViewState {
      `getBookProgress(key)` for one-shot reads. */
   ribbonVisible: boolean;
   ttsEnabled: boolean;
+  /* True while an Auto Scroll session (#4998) is engaged for this view;
+     session-only, never persisted. Drives the View menu checkmark. */
+  autoScrollEnabled: boolean;
   syncing: boolean;
   gridInsets: Insets | null;
   /* True while the reader is showing a position requested by an external
@@ -61,10 +69,16 @@ interface ReaderStore {
   viewStates: { [key: string]: ViewState };
   bookKeys: string[];
   hoveredBookKey: string | null;
+  /* The action tab selected in the mobile bottom bar (font/color/progress);
+     lives here rather than in FooterBar state so the TTS mini player can
+     stack above the expanded panel. Persists across bar hide/show. */
+  bottomBarTab: string;
   setBookKeys: (keys: string[]) => void;
   setHoveredBookKey: (key: string | null) => void;
+  setBottomBarTab: (tab: string) => void;
   setBookmarkRibbonVisibility: (key: string, visible: boolean) => void;
   setTTSEnabled: (key: string, enabled: boolean) => void;
+  setAutoScrollEnabled: (key: string, enabled: boolean) => void;
   setIsLoading: (key: string, loading: boolean) => void;
   setIsSyncing: (key: string, syncing: boolean) => void;
   setProgress: (
@@ -106,8 +120,10 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
   viewStates: {},
   bookKeys: [],
   hoveredBookKey: null,
+  bottomBarTab: '',
   setBookKeys: (keys: string[]) => set({ bookKeys: keys }),
   setHoveredBookKey: (key: string | null) => set({ hoveredBookKey: key }),
+  setBottomBarTab: (tab: string) => set({ bottomBarTab: tab }),
   getView: (key: string | null) => (key && get().viewStates[key]?.view) || null,
   setView: (key: string, view) =>
     set((state) => ({
@@ -133,6 +149,14 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
       delete viewStates[key];
       return { viewStates };
     });
+    // A streamed ABS ebook reads through a RemoteFile that authenticates with
+    // a short-lived access token, so its cached BookDoc must not outlive the
+    // last open view: the next open resolves the stream afresh against the
+    // store's current token. Local books keep their cache for instant reopens.
+    const id = key.split('-')[0]!;
+    if (Object.keys(get().viewStates).some((k) => k.split('-')[0] === id)) return;
+    const book = useLibraryStore.getState().getBookByHash(id);
+    if (book && isAbsEbook(book)) useBookDataStore.getState().clearBookData(id);
   },
   getViewState: (key: string) => get().viewStates[key] || null,
   initViewState: async (
@@ -157,6 +181,7 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
           error: null,
           ribbonVisible: false,
           ttsEnabled: false,
+          autoScrollEnabled: false,
           syncing: false,
           gridInsets: null,
           previewMode: false,
@@ -176,14 +201,28 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
         throw new Error('Book not found');
       }
       const isPseStream = !!book.url && isPseStreamFileName(book.url);
+      const isFeed = !!book.url && isFeedBookUrl(book.url);
       let bookDoc = bookData?.bookDoc;
       let file: File | null = bookData?.file ?? null;
-      if (!bookDoc || (!isPseStream && !file) || reload) {
+      const config = await appService.loadBookConfig(book, settings);
+      // A comic's wide pages are cached in its config: those an open measured,
+      // and those found as streamed pages load.
+      const widePages: WidePagesOptions = {
+        known: config.widePages,
+        onFound: (ids) => useBookDataStore.getState().setConfig(id, { widePages: ids }),
+      };
+      if (!bookDoc || (!isPseStream && !isFeed && !file) || reload) {
         console.log('Loading book', key);
         if (isPseStream) {
           const data = parsePseStreamFileName(book.url!);
-          const doc = await openPseStreamBook(data);
+          const doc = await openPseStreamBook(data, widePages);
           bookDoc = doc.book;
+          file = null;
+        } else if (isFeed) {
+          const { feedUrl } = parseFeedBookUrl(book.url!);
+          // AppService publicly exposes the readFile/writeFile/exists surface of FileSystem.
+          const fs = appService as unknown as FileSystem;
+          bookDoc = await openFeedBookDoc(fs, book.hash, feedUrl, book.title);
           file = null;
         } else {
           const content = (await appService.loadBookContent(book)) as BookContent;
@@ -196,11 +235,12 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
           }
           const doc = await new DocumentLoader(file, {
             nativeFilePath: nativeFilePath ?? undefined,
+            widePages,
           }).open();
           bookDoc = doc.book;
+          if (doc.format === 'CBZ') config.widePages = getWidePages(bookDoc.sections);
         }
       }
-      const config = await appService.loadBookConfig(book, settings);
       // Import annotations from third-party readers on first open
       if (bookDoc.metadata.identifier) {
         const { getAnnotationProviders } = await import('@/services/annotation');
@@ -223,7 +263,7 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
       // Load cached book navigation (TOC + section fragments) or compute and persist.
       if (book.format === 'EPUB' && bookDoc.rendition?.layout !== 'pre-paginated') {
         const cachedNav = await appService.loadBookNav(book);
-        if (cachedNav?.version === BOOK_NAV_VERSION && process.env.NODE_ENV === 'production') {
+        if (isBookNavCacheCurrent(cachedNav) && process.env.NODE_ENV === 'production') {
           hydrateBookNav(bookDoc, cachedNav);
         } else {
           const freshNav = await computeBookNav(bookDoc);
@@ -269,7 +309,11 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
       }
       // TODO: uncomment this when we can ensure metaHash is correctly generated for all books
       // book.metaHash = book.metaHash ?? getMetadataHash(bookDoc.metadata);
-      book.metaHash = getMetadataHash(bookDoc.metadata);
+      // PDF metaHash is salted with the original import filename (issue #5411),
+      // which is lost after import — keep the value stamped at import time.
+      if (book.format !== 'PDF' || !book.metaHash) {
+        book.metaHash = getMetadataHash(bookDoc.metadata);
+      }
 
       const isFixedLayout =
         bookDoc.rendition?.layout === 'pre-paginated' || FIXED_LAYOUT_FORMATS.has(book.format);
@@ -296,6 +340,7 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
             error: null,
             ribbonVisible: false,
             ttsEnabled: false,
+            autoScrollEnabled: false,
             syncing: false,
             gridInsets: null,
             previewMode: false,
@@ -319,6 +364,7 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
             error: 'Failed to load book.',
             ribbonVisible: false,
             ttsEnabled: false,
+            autoScrollEnabled: false,
             syncing: false,
             gridInsets: null,
             previewMode: false,
@@ -466,6 +512,17 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
       },
     })),
 
+  setAutoScrollEnabled: (key: string, enabled: boolean) =>
+    set((state) => ({
+      viewStates: {
+        ...state.viewStates,
+        [key]: {
+          ...state.viewStates[key]!,
+          autoScrollEnabled: enabled,
+        },
+      },
+    })),
+
   setIsLoading: (key: string, loading: boolean) =>
     set((state) => ({
       viewStates: {
@@ -524,19 +581,16 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
     })),
 
   recreateViewer: (envConfig: EnvConfigType, key: string) => {
+    if (!key || get().viewStates[key]?.key !== key) return;
     const id = key.split('-')[0]!;
-    get()
-      .initViewState(envConfig, id, key, true, true)
-      .then(() => {
-        set((state) => ({
-          viewStates: {
-            ...state.viewStates,
-            [key]: {
-              ...state.viewStates[key]!,
-              viewerKey: `${key}-${uniqueId()}`,
-            },
-          },
-        }));
-      });
+    // `initViewState` already mints a fresh `viewerKey` when the reload lands,
+    // which is what remounts <FoliateViewer>. Minting a second one here
+    // remounted it twice: the abandoned first mount kept running its async
+    // `openBook()` and registered another `data` transform listener on the
+    // *same* reloaded bookDoc, so every resource was piped through the
+    // transform chain twice. A twice-transformed stylesheet lost all its
+    // font-family declarations, and the book fell back to the app font
+    // (readest#5277).
+    void get().initViewState(envConfig, id, key, true, true);
   },
 }));

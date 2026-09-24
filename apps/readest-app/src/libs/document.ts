@@ -1,6 +1,8 @@
 import { BookFormat } from '@/types/book';
 import { Collection, Contributor, Identifier, LanguageMap } from '@/utils/book';
 import { configureZip } from '@/utils/zip';
+import { stripDuplicateMarker } from '@/utils/path';
+import type { WidePagesOptions } from '@/utils/spread';
 import * as epubcfi from 'foliate-js/epubcfi.js';
 
 export const CFI = epubcfi;
@@ -44,7 +46,15 @@ export interface SectionItem {
   fragments?: Array<SectionFragment>;
 
   loadText?: () => Promise<string | null>;
+  resolveHref?: (href: string) => string;
+  // Resolve a reference a script introduces after load (see observeDynamicResources).
+  loadHref?: (href: string) => Promise<string>;
   createDocument: () => Promise<Document>;
+
+  // EPUB 3 Media Overlays: the manifest item of this section's SMIL file, or
+  // null when the section has no recorded narration. Populated by foliate's
+  // EPUB parser from the spine item's `media-overlay` attribute.
+  mediaOverlay?: { href: string; id: string } | null;
 }
 
 // A Calibre custom column embedded in the OPF as "user metadata"; parsed by
@@ -68,7 +78,7 @@ export type BookMetadata = {
   publisher?: string;
   published?: string;
   description?: string;
-  subject?: string | string[] | Contributor;
+  subject?: string | string[] | Contributor | Contributor[];
   identifier?: string;
   isbn?: string;
   altIdentifier?: string | string[] | Identifier;
@@ -87,6 +97,18 @@ export type BookMetadata = {
   coverImageBlobUrl?: string;
 
   calibreColumns?: CalibreCustomColumn[];
+  feedUrl?: string;
+
+  // Audiobookshelf mirrors. An ABS stub is fileless: its identity is the
+  // synthetic `abs://<serverId>/<itemId>` filePath, and the library badge is
+  // drawn from duration / media type / episode count. None of those have a
+  // cloud `books` column (and the push strips filePath as device-local), so
+  // they ride across inside this synced metadata payload, exactly as a feed
+  // book carries `feedUrl`. Built and read back in src/utils/audiobook.ts.
+  absSource?: string;
+  absMediaType?: 'podcast' | 'ebook';
+  absEpisodeCount?: number;
+  absDuration?: number;
 };
 
 export interface BookDoc {
@@ -102,7 +124,23 @@ export interface BookDoc {
   sections: Array<SectionItem>;
   transformTarget?: EventTarget;
   splitTOCHref(href: string): Array<string | number>;
+  isExternal?(href: string): boolean;
   getCover(): Promise<Blob | null>;
+  // Present on formats that carry a real spine (EPUB); absent for the ones
+  // foliate-js gives synthetic per-index CFIs. Mirrors `view.resolveCFI`.
+  resolveCFI?(cfi: string): { index: number; anchor?: (doc: Document) => Range | number } | null;
+  // Formats backed by live parser state must be released explicitly: a PDF
+  // book holds a pdf.js document whose dedicated worker survives GC, so
+  // dropping the reference leaks the whole parsed file (#5387).
+  destroy?(): void | Promise<void>;
+
+  // Container access, present on EPUB. Recorded narration needs both: the SMIL
+  // files as text, the audio as blobs. Hrefs are zip paths, as resolved on
+  // manifest items.
+  loadText?(href: string): Promise<string | null>;
+  loadBlob?(href: string): Promise<Blob>;
+  // EPUB 3 `media:*` package metadata, used to name the narrator.
+  media?: { narrator?: string; duration?: number };
 }
 
 export const EXTS: Record<BookFormat, string> = {
@@ -116,6 +154,14 @@ export const EXTS: Record<BookFormat, string> = {
   FBZ: 'fbz',
   TXT: 'txt',
   MD: 'md',
+  HTML: 'html',
+  // ABS books stream from the server and never have a real on-disk file, so
+  // this extension is never used to write or look up a file. It exists only
+  // to satisfy the Record<BookFormat, string> exhaustiveness check.
+  ABS: 'abs',
+  // Same for OPDS audio: the tracks are fetched from the catalog, never stored.
+  OPDSAUDIO: 'opdsaudio',
+  BOOKORBIT: 'bookorbit',
 };
 
 export const MIMETYPES: Record<BookFormat, string[]> = {
@@ -129,6 +175,13 @@ export const MIMETYPES: Record<BookFormat, string[]> = {
   FBZ: ['application/x-zip-compressed-fb2', 'application/zip'],
   TXT: ['text/plain'],
   MD: ['text/markdown', 'text/x-markdown'],
+  HTML: ['text/html'],
+  // Never matched against a real download; see the EXTS.ABS comment above.
+  ABS: ['application/vnd.audiobookshelf'],
+  // OPDS audio is identified from the acquisition link (services/opds/formats),
+  // never by looking a BookFormat up here.
+  OPDSAUDIO: [],
+  BOOKORBIT: [],
 };
 
 export interface DocumentLoaderOptions {
@@ -141,15 +194,64 @@ export interface DocumentLoaderOptions {
    * EPUB when the prefetch cache is hit.
    */
   nativeFilePath?: string;
+  /**
+   * Lay out each wide page of a comic (a double-page spread stored as one
+   * image) as a spread of its own. The pages are measured up front, reading
+   * every page's header, unless `known` holds what an earlier open found; and
+   * each again as it loads, which `onFound` hears of. Only the reader asks.
+   */
+  widePages?: WidePagesOptions;
+}
+
+type PDFJSGlobal = {
+  GlobalWorkerOptions: { workerSrc: string };
+};
+
+let compatPDFWorkerURL: string | undefined;
+
+async function configurePDFWorker() {
+  if (typeof ArrayBuffer.prototype.transferToFixedLength === 'function') return;
+
+  // PDF.js 6 uses transferToFixedLength inside its worker, but WebKit 16 does
+  // not provide it. PDF.js swallows the resulting worker error and renders an
+  // empty operator list, leaving both the cover and every page blank (#6015).
+  await import('@pdfjs/pdf.min.mjs');
+  const { pdfjsLib } = globalThis as typeof globalThis & { pdfjsLib: PDFJSGlobal };
+  const workerURL = new URL('/vendor/pdfjs/pdf.worker.min.mjs', location.href).href;
+  compatPDFWorkerURL ??= URL.createObjectURL(
+    new Blob(
+      [
+        `if (!ArrayBuffer.prototype.transferToFixedLength) {
+  Object.defineProperty(ArrayBuffer.prototype, 'transferToFixedLength', {
+    configurable: true,
+    writable: true,
+    value(newByteLength = this.byteLength) {
+      const result = new ArrayBuffer(newByteLength);
+      new Uint8Array(result).set(
+        new Uint8Array(this, 0, Math.min(this.byteLength, result.byteLength)),
+      );
+      return result;
+    },
+  });
+}
+const { WorkerMessageHandler } = await import(${JSON.stringify(workerURL)});
+export { WorkerMessageHandler };`,
+      ],
+      { type: 'text/javascript' },
+    ),
+  );
+  pdfjsLib.GlobalWorkerOptions.workerSrc = compatPDFWorkerURL;
 }
 
 export class DocumentLoader {
   private file: File;
   private nativeFilePath?: string;
+  private widePages?: WidePagesOptions;
 
   constructor(file: File, options: DocumentLoaderOptions = {}) {
     this.file = file;
     this.nativeFilePath = options.nativeFilePath;
+    this.widePages = options.widePages;
   }
 
   private async isZip(): Promise<boolean> {
@@ -320,24 +422,34 @@ export class DocumentLoader {
     return { entries, loadText, loadBlob, getSize, getComment, sha1: undefined };
   }
 
+  /**
+   * File name with any duplicate-download marker removed, e.g.
+   * `novel.epub (1)` -> `novel.epub`. Some download managers append the marker
+   * after the extension, which would otherwise hide the extension from every
+   * probe below and drop the file onto the unknown-binary path (issue #5959).
+   */
+  private get filename(): string {
+    return stripDuplicateMarker(this.file.name ?? '');
+  }
+
   private isCBZ(): boolean {
     return (
-      this.file.type === 'application/vnd.comicbook+zip' || this.file.name.endsWith(`.${EXTS.CBZ}`)
+      this.file.type === 'application/vnd.comicbook+zip' || this.filename.endsWith(`.${EXTS.CBZ}`)
     );
   }
 
   private isFB2(): boolean {
     return (
-      this.file.type === 'application/x-fictionbook+xml' || this.file.name.endsWith(`.${EXTS.FB2}`)
+      this.file.type === 'application/x-fictionbook+xml' || this.filename.endsWith(`.${EXTS.FB2}`)
     );
   }
 
   private isFBZ(): boolean {
     return (
       this.file.type === 'application/x-zip-compressed-fb2' ||
-      this.file.name.endsWith('.fb.zip') ||
-      this.file.name.endsWith('.fb2.zip') ||
-      this.file.name.endsWith(`.${EXTS.FBZ}`)
+      this.filename.endsWith('.fb.zip') ||
+      this.filename.endsWith('.fb2.zip') ||
+      this.filename.endsWith(`.${EXTS.FBZ}`)
     );
   }
 
@@ -347,17 +459,26 @@ export class DocumentLoader {
     // non-text path and yield a null book.
     return (
       this.file.type.startsWith('text/plain') ||
-      (this.file.name?.toLowerCase().endsWith(`.${EXTS.TXT}`) ?? false)
+      this.filename.toLowerCase().endsWith(`.${EXTS.TXT}`)
     );
   }
 
   private isMd(): boolean {
-    const name = this.file.name?.toLowerCase() ?? '';
+    const name = this.filename.toLowerCase();
     return (
       this.file.type === 'text/markdown' ||
       this.file.type === 'text/x-markdown' ||
       name.endsWith(`.${EXTS.MD}`) ||
       name.endsWith('.markdown')
+    );
+  }
+
+  private isHtml(): boolean {
+    const name = this.filename.toLowerCase();
+    return (
+      this.file.type.startsWith('text/html') ||
+      name.endsWith(`.${EXTS.HTML}`) ||
+      name.endsWith('.htm')
     );
   }
 
@@ -379,6 +500,12 @@ export class DocumentLoader {
       if (this.isMd()) {
         const { makeMarkdownBook } = await import('@/utils/md');
         return { book: await makeMarkdownBook(this.file), format: 'MD' };
+      }
+      // A saved web page (SingleFile, "Save as HTML") is rendered the same way:
+      // Readability keeps the article and its inlined images, drops the chrome.
+      if (this.isHtml()) {
+        const { makeHtmlBook } = await import('@/utils/html');
+        return { book: await makeHtmlBook(this.file), format: 'HTML' };
       }
       if (this.isTxt()) {
         const { TxtToEpubConverter } = await import('@/utils/txt');
@@ -404,7 +531,18 @@ export class DocumentLoader {
 
         if (this.isCBZ()) {
           const { makeComicBook } = await import('foliate-js/comic-book.js');
-          book = await makeComicBook(loader, this.file);
+          if (this.widePages) {
+            const { measureWidePages, trackWidePages } = await import('@/utils/spread');
+            const { known, onFound } = this.widePages;
+            const pages = trackWidePages(loader, onFound);
+            book = await makeComicBook(pages.loader, this.file);
+            pages.attach(
+              book.sections,
+              known ?? (await measureWidePages(this.file, entries, this.nativeFilePath)),
+            );
+          } else {
+            book = await makeComicBook(loader, this.file);
+          }
           format = 'CBZ';
         } else if (this.isFBZ()) {
           const entry = entries.find((entry) => entry.filename.endsWith(`.${EXTS.FB2}`));
@@ -418,6 +556,7 @@ export class DocumentLoader {
           format = 'EPUB';
         }
       } else if (await this.isPDF()) {
+        await configurePDFWorker();
         const { makePDF } = await import('foliate-js/pdf.js');
         book = await makePDF(this.file);
         format = 'PDF';
@@ -425,7 +564,7 @@ export class DocumentLoader {
         const fflate = await import('foliate-js/vendor/fflate.js');
         const { MOBI } = await import('foliate-js/mobi.js');
         book = await new MOBI({ unzlib: fflate.unzlibSync }).open(this.file);
-        const ext = this.file.name.split('.').pop()?.toLowerCase();
+        const ext = this.filename.split('.').pop()?.toLowerCase();
         switch (ext) {
           case 'azw':
             format = 'AZW';
@@ -476,6 +615,33 @@ export const getDirection = (doc: Document) => {
     doc.documentElement.dir === 'rtl';
   return { vertical, rtl };
 };
+
+/**
+ * Which way the reader turns pages, for a section whose own direction is
+ * `documentRtl` (from {@link getDirection}).
+ *
+ * `page-progression-direction` is a publication-wide declaration, so it settles
+ * the direction for every section: a book that mixes vertical and horizontal
+ * chapters must not turn its pages one way in one and the other way in the
+ * next. Only `ltr`/`rtl` bind — `default`, or no attribute at all, leaves the
+ * choice to us, and there the document decides.
+ *
+ * A writing mode the reader picked in Settings stays above all of it: it is an
+ * explicit instruction, and `vertical-rl` reads right-to-left by definition,
+ * whatever the book's spine says.
+ */
+export const getPageProgressionRTL = (
+  writingMode: string,
+  bookDir: string | undefined,
+  documentRtl: boolean,
+) =>
+  writingMode.includes('rl')
+    ? true
+    : bookDir === 'rtl'
+      ? true
+      : bookDir === 'ltr'
+        ? false
+        : documentRtl;
 
 export const getFileExtFromMimeType = (mimeType?: string): string => {
   if (!mimeType) return '';

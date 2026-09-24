@@ -467,29 +467,66 @@ describe('Paginator multi-view architecture (browser)', () => {
     });
   });
 
-  describe('Adjacent index skipping non-linear sections', () => {
-    it('should skip non-linear sections during navigation', async () => {
+  describe('Adjacent section lifecycle', () => {
+    it('ignores a page turn when the section list is invalidated before navigation resumes', async () => {
       paginator = createPaginator();
-      paginator.open(book);
-      const sections = book.sections!;
-      const nonLinearIdx = sections.findIndex((s) => s.linear === 'no');
-      // If there are non-linear sections, navigating past them should work
-      if (nonLinearIdx >= 0) {
-        const prevLinear = sections.slice(0, nonLinearIdx).findLastIndex((s) => s.linear !== 'no');
-        if (prevLinear >= 0) {
-          const stabilized = waitForStabilized(paginator);
-          await paginator.goTo({ index: prevLinear });
-          await stabilized;
-          await waitForFillComplete(paginator);
-          // Next should skip non-linear and go to next linear
-          await paginator.next();
-          await new Promise((r) => setTimeout(r, 500));
-          expect(paginator.primaryIndex).not.toBe(nonLinearIdx);
-          expect(sections[paginator.primaryIndex]!.linear).not.toBe('no');
-        }
+      paginator.setAttribute('no-preload', '');
+      const sections = [...book.sections!];
+      paginator.open({ ...book, sections } as BookDoc);
+      const index = sections.findIndex(
+        (section, i) =>
+          section.linear !== 'no' && sections.slice(i + 1).some((next) => next.linear !== 'no'),
+      );
+      const stabilized = waitForStabilized(paginator);
+      await paginator.goTo({ index, anchor: 1 });
+      await stabilized;
+
+      const turn = paginator.next();
+      (paginator as Renderer & { sections: BookDoc['sections'] }).sections = [];
+
+      await expect(turn).resolves.toBeUndefined();
+    });
+
+    it('ignores a section load when the iframe document is unavailable', async () => {
+      let resolveSection!: (src: string) => void;
+      const sectionLoaded = new Promise<string>((resolve) => {
+        resolveSection = resolve;
+      });
+      const sections = [
+        {
+          linear: 'yes',
+          load: () => sectionLoaded,
+        },
+      ];
+      paginator = createPaginator();
+      paginator.open({ sections } as unknown as BookDoc);
+
+      const descriptor = Object.getOwnPropertyDescriptor(
+        HTMLIFrameElement.prototype,
+        'contentDocument',
+      );
+      if (!descriptor) throw new Error('HTMLIFrameElement.contentDocument is unavailable');
+
+      Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', {
+        configurable: true,
+        get: () => null,
+      });
+
+      try {
+        const navigation = paginator.goTo({ index: 0 });
+        resolveSection('about:blank');
+
+        await expect(
+          Promise.race([
+            navigation,
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('navigation timeout')), 1000),
+            ),
+          ]),
+        ).resolves.toBeUndefined();
+      } finally {
+        Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', descriptor);
       }
-      // If no non-linear sections, the test passes trivially
-      expect(true).toBe(true);
     });
   });
 });

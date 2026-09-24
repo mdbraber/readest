@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { PiUserCircle, PiUserCircleCheck, PiGear } from 'react-icons/pi';
 import { PiSun, PiMoon } from 'react-icons/pi';
 import { TbSunMoon } from 'react-icons/tb';
-import { MdCloudSync, MdSync, MdSyncProblem } from 'react-icons/md';
+import { MdCloudSync, MdSync, MdSyncProblem, MdOutlineSensors } from 'react-icons/md';
 
 import { isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
 import { DOWNLOAD_READEST_URL } from '@/services/constants';
@@ -14,15 +14,11 @@ import { useAuth } from '@/context/AuthContext';
 import { useEnv } from '@/context/EnvContext';
 import { useThemeStore } from '@/store/themeStore';
 import { useQuotaStats } from '@/hooks/useQuotaStats';
-import { useFileSyncStore } from '@/store/fileSyncStore';
-import {
-  getCloudSyncProvider,
-  cloudProviderDisplayName,
-  settingsKeyForBackend,
-} from '@/services/sync/cloudSyncProvider';
+import { isReadestCloudEnabled } from '@/services/sync/cloudSyncProvider';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useTranslation } from '@/hooks/useTranslation';
+import { useCloudSyncStatus } from '@/hooks/useCloudSyncStatus';
 import { useResponsiveSize } from '@/hooks/useResponsiveSize';
 import { useTransferQueue } from '@/hooks/useTransferQueue';
 import { navigateToLogin, navigateToProfile } from '@/utils/nav';
@@ -37,7 +33,7 @@ import {
   isBiometricSupported,
 } from '@/services/biometric';
 import { selectDirectory } from '@/utils/bridge';
-import dayjs from 'dayjs';
+import { nextThemeMode } from '@/utils/ambientLight';
 import UserAvatar from '@/components/UserAvatar';
 import MenuItem from '@/components/MenuItem';
 import Quota from '@/components/Quota';
@@ -57,7 +53,6 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
   const { userProfilePlan, quotas } = useQuotaStats(true);
   const { themeMode, setThemeMode } = useThemeStore();
   const { settings, setSettingsDialogOpen } = useSettingsStore();
-  const [isAutoUpload, setIsAutoUpload] = useState(settings.autoUpload);
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(settings.alwaysOnTop);
   const [isAlwaysShowStatusBar, setIsAlwaysShowStatusBar] = useState(settings.alwaysShowStatusBar);
   const [isOpenLastBooks, setIsOpenLastBooks] = useState(settings.openLastBooks);
@@ -99,8 +94,6 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
     setIsDropdownOpen?.(false);
   };
   const { isSyncing, setLibrary } = useLibraryStore();
-  const fileSyncByKind = useFileSyncStore((s) => s.byKind);
-  const fileSyncLastError = useFileSyncStore((s) => s.lastErrorByKind);
   const { stats, hasActiveTransfers, setIsTransferQueueOpen } = useTransferQueue();
 
   const openTransferQueue = () => {
@@ -134,8 +127,7 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
   };
 
   const cycleThemeMode = () => {
-    const nextMode = themeMode === 'auto' ? 'light' : themeMode === 'light' ? 'dark' : 'auto';
-    setThemeMode(nextMode);
+    setThemeMode(nextThemeMode(themeMode, !!appService?.hasAmbientLightSensor));
   };
 
   const handleFullScreen = () => {
@@ -160,16 +152,6 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
     const newValue = !settings.alwaysShowStatusBar;
     saveSysSettings(envConfig, 'alwaysShowStatusBar', newValue);
     setIsAlwaysShowStatusBar(newValue);
-  };
-
-  const toggleAutoUploadBooks = () => {
-    const newValue = !settings.autoUpload;
-    saveSysSettings(envConfig, 'autoUpload', newValue);
-    setIsAutoUpload(newValue);
-
-    if (newValue && !user) {
-      navigateToLogin(router);
-    }
   };
 
   const toggleAutoImportBooksOnOpen = () => {
@@ -246,7 +228,7 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
   };
 
   const handleSetSavedBookCoverForLockScreen = async () => {
-    if (!(await requestStoragePermission()) && appService?.distChannel === 'readest') return;
+    if (!(await requestStoragePermission())) return;
 
     const newValue = settings.savedBookCoverForLockScreen ? '' : 'default';
     if (newValue) {
@@ -272,41 +254,35 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
       ? _('Dark Mode')
       : themeMode === 'light'
         ? _('Light Mode')
-        : _('Auto Mode');
+        : themeMode === 'ambient'
+          ? _('Ambient Mode')
+          : _('Auto Mode');
 
   const savedBookCoverPath = settings.savedBookCoverForLockScreenPath;
   const coverDir = savedBookCoverPath ? savedBookCoverPath.split('/').pop() : 'Images';
   const savedBookCoverDescription = `💾 ${coverDir}/last-book-cover.png`;
 
-  // While a third-party provider is selected the native cursors freeze (the
-  // book/progress/note channels are gated), so the sync row must report the
-  // file engine's health instead — otherwise it reads "Synced 3 months ago"
-  // forever and looks broken.
-  const cloudProvider = getCloudSyncProvider(settings);
-  const cloudProviderName = cloudProviderDisplayName(cloudProvider);
-  const providerSyncing = cloudProvider !== 'readest' && !!fileSyncByKind[cloudProvider]?.isSyncing;
-  const providerLastError =
-    cloudProvider !== 'readest' ? fileSyncLastError[cloudProvider] : undefined;
-  const lastSyncTime =
-    cloudProvider !== 'readest'
-      ? settings[settingsKeyForBackend(cloudProvider)]?.lastSyncedAt || 0
-      : Math.max(
-          settings.lastSyncedAtBooks || 0,
-          settings.lastSyncedAtConfigs || 0,
-          settings.lastSyncedAtNotes || 0,
-        );
-  const syncRowLabel =
-    cloudProvider !== 'readest'
-      ? providerLastError
-        ? _('Sync failed')
-        : lastSyncTime
-          ? _('Synced {{time}}', {
-              time: dayjs(lastSyncTime).fromNow(),
-            })
-          : _('Never synced')
-      : lastSyncTime
-        ? _('Synced {{time}}', { time: dayjs(lastSyncTime).fromNow() })
-        : _('Never synced');
+  // The sync row reports the health of whatever the user selected. Native
+  // cursors freeze while Readest Cloud is off (the book/progress/note channels
+  // are gated), so the file engine's timestamps have to stand in.
+  const readestEnabled = isReadestCloudEnabled(settings);
+  // Shared with the reader's View menu (#5910) so both surfaces answer "is my
+  // sync healthy?" identically. The hook gates the native cursors on whether
+  // Readest Cloud is actually enabled and drops backends that cannot run right
+  // now (a web Google Drive whose token expired is still `enabled` but silently
+  // skipped, so counting it would inflate the count and lend its stale
+  // lastSyncedAt to "Synced X ago").
+  const syncStatus = useCloudSyncStatus(
+    Math.max(
+      settings.lastSyncedAtBooks || 0,
+      settings.lastSyncedAtConfigs || 0,
+      settings.lastSyncedAtNotes || 0,
+    ),
+  );
+  const fileBackendCount = syncStatus.providers.filter((p) => p.kind !== 'readest').length;
+  // Hoisted out of the `_()` call below: i18next-scanner parses the options
+  // object with esprima, which chokes on TypeScript's `!` non-null assertion.
+  const firstProviderName = syncStatus.providers[0]?.name ?? '';
 
   return (
     <Menu
@@ -323,7 +299,7 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
               ? _('Logged in as {{userDisplayName}}', { userDisplayName })
               : _('Logged in')
           }
-          labelClass='!max-w-40'
+          labelClass='max-w-40! truncate text-nowrap!'
           aria-label={_('View account details and quota')}
           Icon={
             avatarUrl ? (
@@ -350,20 +326,30 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
               onClick={openTransferQueue}
             />
             <MenuItem
-              label={syncRowLabel}
-              Icon={user ? MdSync : MdSyncProblem}
-              labelClass='ps-2 pe-1 !mx-0'
-              iconClassName={(user && isSyncing) || providerSyncing ? 'animate-reverse-spin' : ''}
+              label={syncStatus.label}
+              Icon={syncStatus.needsSignIn || syncStatus.failed ? MdSyncProblem : MdSync}
+              labelClass='ps-2 pe-1 mx-0!'
+              iconClassName={
+                (user && isSyncing) || syncStatus.syncing ? 'animate-reverse-spin' : ''
+              }
               onClick={handleSyncLibrary}
               description={
-                cloudProvider !== 'readest'
-                  ? _('Library sync via {{provider}}', {
-                      provider: cloudProviderName,
-                    })
-                  : undefined
+                fileBackendCount === 0
+                  ? undefined
+                  : syncStatus.providers.length > 1
+                    ? // Several providers named in full would overrun the row; show a
+                      // count. `count` (not a plain var) so i18next applies each
+                      // locale's plural rule — the common case is exactly 2, where
+                      // Slavic/Arabic paucal forms differ from the generic plural.
+                      _('Library sync via {{count}} providers', {
+                        count: syncStatus.providers.length,
+                      })
+                    : _('Library sync via {{provider}}', {
+                        provider: firstProviderName,
+                      })
               }
             />
-            {cloudProvider === 'readest' ? (
+            {readestEnabled ? (
               <button
                 onClick={handleUserProfile}
                 className='hover:bg-base-300 w-full rounded-md'
@@ -379,14 +365,6 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
         </MenuItem>
       ) : (
         <MenuItem label={_('Sign In')} Icon={PiUserCircle} onClick={handleUserLogin}></MenuItem>
-      )}
-
-      {cloudProvider === 'readest' && (
-        <MenuItem
-          label={_('Auto Upload Books to Cloud')}
-          toggled={isAutoUpload}
-          onClick={toggleAutoUploadBooks}
-        />
       )}
 
       {isTauriAppPlatform() && (
@@ -424,7 +402,15 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
       )}
       <MenuItem
         label={themeModeLabel}
-        Icon={themeMode === 'dark' ? PiMoon : themeMode === 'light' ? PiSun : TbSunMoon}
+        Icon={
+          themeMode === 'dark'
+            ? PiMoon
+            : themeMode === 'light'
+              ? PiSun
+              : themeMode === 'ambient'
+                ? MdOutlineSensors
+                : TbSunMoon
+        }
         onClick={cycleThemeMode}
       />
       <MenuItem label={_('Settings')} Icon={PiGear} onClick={openSettingsDialog} />
@@ -469,7 +455,7 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ onPullLibrary, setIsDropdow
               onClick={toggleBiometricUnlock}
             />
           )}
-          {appService?.isAndroidApp && appService?.distChannel !== 'playstore' && (
+          {appService?.isAndroidApp && (
             <MenuItem
               label={_('Save Book Cover')}
               tooltip={_('Auto-save last book cover')}

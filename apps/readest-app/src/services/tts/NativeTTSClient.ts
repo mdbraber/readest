@@ -4,7 +4,7 @@ import { getUserLocale } from '@/utils/misc';
 import { isSameLang } from '@/utils/lang';
 import { parseSSMLMarks } from '@/utils/ssml';
 import { stubTranslation as _ } from '@/utils/misc';
-import { TTSClient, TTSMessageEvent } from './TTSClient';
+import { TTSCapabilities, TTSClient, TTSMessageEvent } from './TTSClient';
 import { TTSGranularity, TTSMark, TTSVoice, TTSVoicesGroup } from './types';
 import { TTSUtils } from './TTSUtils';
 import { TTSController } from './TTSController';
@@ -250,7 +250,13 @@ export class NativeTTSClient implements TTSClient {
     }
     try {
       const result = await invoke<{ voices: TTSVoice[] }>('plugin:native-tts|get_all_voices');
-      this.#voices = result.voices;
+      // Match Web Speech's Apple voice-family exclusions. iOS also exposes
+      // novelty and legacy Eloquence voices through the native API.
+      this.#voices = result.voices.filter(
+        (voice) =>
+          !voice.id.startsWith('com.apple.eloquence.') &&
+          !voice.id.startsWith('com.apple.speech.synthesis.voice.'),
+      );
       return this.#voices;
     } catch (error) {
       console.error('Failed to get all voices:', error);
@@ -306,8 +312,10 @@ export class NativeTTSClient implements TTSClient {
     this.#primaryLang = lang;
   }
 
-  supportsWordBoundaries(): boolean {
-    return false;
+  getCapabilities(): TTSCapabilities {
+    // Direct-speak engine: the OS renders the audio, so there is no media
+    // clock, no word boundaries, and no gap or live-rate control.
+    return { wordBoundaries: false, mediaClock: false, gapControl: false, liveRateChange: false };
   }
 
   getGranularities(): TTSGranularity[] {

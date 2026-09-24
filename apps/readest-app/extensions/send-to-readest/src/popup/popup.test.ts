@@ -28,6 +28,7 @@ const POPUP_DOM = `
       <div class="progress-label" id="progress-label">Preparing…</div>
       <div class="progress-bar indeterminate"><div class="progress-bar-fill"></div></div>
     </div>
+    <button id="enable-file-access" class="secondary hidden">Allow access to file URLs</button>
     <p id="status" class="status"></p>
   </section>
   <section id="signed-out-view" class="sign-in hidden">
@@ -113,65 +114,85 @@ describe('popup — initial render', () => {
     expect(document.getElementById('page-title')?.textContent).toBe('This page cannot be clipped');
     expect((document.getElementById('send') as HTMLButtonElement).disabled).toBe(true);
   });
+
+  test('clips a locally opened file:// page when file access is granted', async () => {
+    chromeMock.tabs.query.mockResolvedValue([
+      { id: 3, url: 'file:///Users/me/Saved%20Page.html', title: 'Saved Page' },
+    ] as unknown as chrome.tabs.Tab[]);
+    await loadPopup();
+
+    expect(document.getElementById('page-title')?.textContent).toBe('Saved Page');
+    expect((document.getElementById('send') as HTMLButtonElement).disabled).toBe(false);
+    expect(document.getElementById('enable-file-access')?.classList.contains('hidden')).toBe(true);
+  });
+
+  test('prompts for the file-access toggle instead of failing opaquely', async () => {
+    // Without "Allow access to file URLs" the capture-script inject dies
+    // with an unreadable host-permission error — tell the user what to do.
+    chromeMock.extension.isAllowedFileSchemeAccess.mockResolvedValue(false);
+    chromeMock.tabs.query.mockResolvedValue([
+      { id: 3, url: 'file:///Users/me/Saved%20Page.html', title: 'Saved Page' },
+    ] as unknown as chrome.tabs.Tab[]);
+    await loadPopup();
+
+    expect((document.getElementById('send') as HTMLButtonElement).disabled).toBe(true);
+    expect(document.getElementById('enable-file-access')?.classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('status')?.textContent).toContain('local files');
+  });
+
+  test('the file-access button opens this extension own settings page', async () => {
+    chromeMock.extension.isAllowedFileSchemeAccess.mockResolvedValue(false);
+    chromeMock.tabs.query.mockResolvedValue([
+      { id: 3, url: 'file:///Users/me/Saved%20Page.html', title: 'Saved Page' },
+    ] as unknown as chrome.tabs.Tab[]);
+    await loadPopup();
+
+    document
+      .getElementById('enable-file-access')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(chromeMock.tabs.create).toHaveBeenCalledWith({
+      url: 'chrome://extensions/?id=test-extension-id',
+    });
+  });
 });
 
 describe('popup — render(progress)', () => {
-  test('"capturing" disables Send and shows the reading label', async () => {
+  test('renders each progress phase', async () => {
     await loadPopup();
+
     pushProgress({ phase: 'capturing' });
     expect(document.getElementById('progress-label')?.textContent).toBe('Reading page…');
     expect((document.getElementById('send') as HTMLButtonElement).disabled).toBe(true);
     expect(document.getElementById('progress')?.classList.contains('show')).toBe(true);
-  });
 
-  test('"converting" shows the EPUB-build label', async () => {
-    await loadPopup();
     pushProgress({ phase: 'converting' });
     expect(document.getElementById('progress-label')?.textContent).toBe('Building EPUB…');
-  });
 
-  test('"uploading" shows the send-to-Readest label', async () => {
-    await loadPopup();
     pushProgress({ phase: 'uploading' });
     expect(document.getElementById('progress-label')?.textContent).toBe('Sending to Readest…');
-  });
 
-  test('"done" hides progress, re-enables Send, shows success status', async () => {
-    await loadPopup();
     pushProgress({ phase: 'done' });
     expect(document.getElementById('progress')?.classList.contains('show')).toBe(false);
     expect((document.getElementById('send') as HTMLButtonElement).disabled).toBe(false);
     const status = document.getElementById('status')!;
     expect(status.classList.contains('ok')).toBe(true);
     expect(status.textContent).toContain('Saved to your library');
-  });
 
-  test('"done" with missingAssets surfaces the image-fetch failure count', async () => {
-    await loadPopup();
     pushProgress({ phase: 'done', missingAssets: 3 });
     expect(document.getElementById('status')?.textContent).toContain(
       '3 images could not be fetched',
     );
-  });
 
-  test('"done" with a single missing asset uses singular grammar', async () => {
-    await loadPopup();
     pushProgress({ phase: 'done', missingAssets: 1 });
     expect(document.getElementById('status')?.textContent).toContain(
       '1 image could not be fetched',
     );
-  });
 
-  test('"error" surfaces the message and re-enables Send', async () => {
-    await loadPopup();
     pushProgress({ phase: 'error', code: 'server-error', message: 'Server returned 500' });
     expect((document.getElementById('send') as HTMLButtonElement).disabled).toBe(false);
     expect(document.getElementById('status')?.classList.contains('err')).toBe(true);
     expect(document.getElementById('status')?.textContent).toBe('Server returned 500');
-  });
 
-  test('"error" with session-expired flips to the signed-out view', async () => {
-    await loadPopup();
     pushProgress({ phase: 'error', code: 'session-expired', message: 'Session expired' });
     expect(document.getElementById('signed-in-view')?.classList.contains('hidden')).toBe(true);
     expect(document.getElementById('signed-out-view')?.classList.contains('hidden')).toBe(false);

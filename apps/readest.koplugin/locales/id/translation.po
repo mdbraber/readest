@@ -17,6 +17,36 @@ msgstr "Readest"
 msgid "Keeps your KOReader and Readest devices in sync."
 msgstr "Menjaga perangkat KOReader dan Readest Anda tetap sinkron."
 
+msgid "Downloading %1 of %2…"
+msgstr "Mengunduh %1 dari %2…"
+
+msgid "%1 MB downloaded"
+msgstr "%1 MB diunduh"
+
+msgid "No downloads in progress."
+msgstr "Tidak ada unduhan yang berlangsung."
+
+msgid "Run in background"
+msgstr "Jalankan di latar belakang"
+
+msgid "Cancel download"
+msgstr "Batalkan unduhan"
+
+msgid "Download cancelled. %1 of %2 downloaded."
+msgstr "Unduhan dibatalkan. %1 dari %2 terunduh."
+
+msgid "Downloaded %1 of %2 (skipped %3)."
+msgstr "%1 dari %2 terunduh (%3 dilewati)."
+
+msgid "Downloaded %1 of %2."
+msgstr "%1 dari %2 terunduh."
+
+msgid "Set Home folder in File Manager first to enable downloads."
+msgstr "Atur folder Home di Pengelola Berkas terlebih dahulu untuk mengaktifkan unduhan."
+
+msgid "No books to download."
+msgstr "Tidak ada buku untuk diunduh."
+
 msgid "Library view"
 msgstr "Tampilan Pustaka"
 
@@ -68,8 +98,14 @@ msgstr "Naik"
 msgid "Actions"
 msgstr "Tindakan"
 
+msgid "Sync now"
+msgstr "Sinkronkan sekarang"
+
 msgid "Download all books"
 msgstr "Unduh semua buku"
+
+msgid "Download progress"
+msgstr "Progres unduhan"
 
 msgid "Rescan library"
 msgstr "Pindai ulang pustaka"
@@ -104,6 +140,12 @@ msgstr "Cari di Pustaka"
 msgid "Search title or author"
 msgstr "Cari judul atau pengarang"
 
+msgid "Books synced"
+msgstr "Buku tersinkronisasi"
+
+msgid "Books sync failed"
+msgstr "Sinkronisasi buku gagal"
+
 msgid "Cover Browser plugin required for full Library rendering. Falling back to plain list."
 msgstr "Plugin Cover Browser diperlukan untuk render Pustaka penuh. Kembali ke daftar polos."
 
@@ -116,18 +158,6 @@ msgstr "Unduh buku ini dari Readest?"
 msgid "Download"
 msgstr "Unduh"
 
-msgid "Set Home folder in File Manager first to enable downloads."
-msgstr "Atur folder Home di Pengelola Berkas terlebih dahulu untuk mengaktifkan unduhan."
-
-msgid "Downloading…"
-msgstr "Mengunduh…"
-
-msgid "Cloud copy unavailable."
-msgstr "Salinan cloud tidak tersedia."
-
-msgid "Download failed."
-msgstr "Unduhan gagal."
-
 msgid "No cover available on Readest."
 msgstr "Tidak ada sampul tersedia di Readest."
 
@@ -137,20 +167,8 @@ msgstr "Unduhan sampul gagal."
 msgid "Could not delete the file."
 msgstr "Tidak dapat menghapus berkas."
 
-msgid "No books to download."
-msgstr "Tidak ada buku untuk diunduh."
-
-msgid "Downloading %1 of %2…"
-msgstr "Mengunduh %1 dari %2…"
-
-msgid "Download cancelled. %1 of %2 downloaded."
-msgstr "Unduhan dibatalkan. %1 dari %2 terunduh."
-
-msgid "Downloaded %1 of %2 (skipped %3)."
-msgstr "%1 dari %2 terunduh (%3 dilewati)."
-
-msgid "Downloaded %1 of %2."
-msgstr "%1 dari %2 terunduh."
+msgid "Download group"
+msgstr "Unduh grup"
 
 msgid "Removing from cloud…"
 msgstr "Menghapus dari cloud…"
@@ -190,6 +208,9 @@ msgstr "Kuota penyimpanan terlampaui."
 
 msgid "Upload failed."
 msgstr "Unggahan gagal."
+
+msgid "Send to nearby Readest devices"
+msgstr "Kirim ke perangkat Readest terdekat"
 
 msgid "Download Book"
 msgstr "Unduh Buku"
@@ -233,8 +254,11 @@ msgstr "Kirim anotasi Readest dari perangkat ini"
 msgid "Pull readest annotations from other devices"
 msgstr "Ambil anotasi Readest dari perangkat lain"
 
-msgid "Add to Readest"
-msgstr "Tambahkan ke Readest"
+msgid "Full sync all readest annotations"
+msgstr "Sinkronisasi penuh semua anotasi Readest"
+
+msgid "Add to Readest library"
+msgstr "Tambahkan ke pustaka Readest"
 
 msgid "Sign in to Readest first."
 msgstr "Masuk ke Readest terlebih dahulu."
@@ -257,6 +281,12 @@ msgstr "Sudah ada di Pustaka Readest Anda:"
 msgid "Added to Readest:"
 msgstr "Ditambahkan ke Readest:"
 
+msgid "No book is open"
+msgstr "Tidak ada buku terbuka"
+
+msgid "Uploaded to Readest:"
+msgstr "Diunggah ke Readest:"
+
 msgid "Log in Readest Account"
 msgstr "Masuk ke akun Readest"
 
@@ -275,17 +305,14 @@ msgstr "Kirim statistik sekarang"
 msgid "Pull stats now"
 msgstr "Tarik statistik sekarang"
 
-msgid "Push books now"
-msgstr "Kirim buku sekarang"
-
-msgid "Pull books now"
-msgstr "Tarik buku sekarang"
-
 msgid "Push reading progress now"
 msgstr "Kirim progres baca sekarang"
 
 msgid "Pull reading progress now"
 msgstr "Ambil progres baca sekarang"
+
+msgid "Upload current book to Readest"
+msgstr "Unggah buku saat ini ke Readest"
 
 msgid "Push annotations now"
 msgstr "Kirim anotasi sekarang"
@@ -299,6 +326,9 @@ msgstr "Sinkronisasi penuh semua anotasi"
 msgid "Sync info"
 msgstr "Info sinkronisasi"
 
+msgid "Receive via Nearby BookDrop"
+msgstr "Terima melalui Nearby BookDrop"
+
 msgid "Check for update (v%1)"
 msgstr "Periksa pembaruan (v%1)"
 
@@ -310,9 +340,6 @@ msgstr "Silakan masuk terlebih dahulu"
 
 msgid "Please configure Readest settings first"
 msgstr "Konfigurasikan pengaturan Readest terlebih dahulu"
-
-msgid "No book is open"
-msgstr "Tidak ada buku terbuka"
 
 msgid "(none)"
 msgstr "(tidak ada)"
@@ -335,11 +362,89 @@ msgstr "Info sinkronisasi"
 msgid "Library not initialized"
 msgstr "Pustaka belum diinisialisasi"
 
-msgid "Books synced"
-msgstr "Buku tersinkronisasi"
+msgid "Set a Readest download folder or a KOReader home folder first."
+msgstr "Atur folder unduhan Readest atau folder utama KOReader terlebih dahulu."
 
-msgid "Books sync failed"
-msgstr "Sinkronisasi buku gagal"
+msgid "Nearby BookDrop error: could not find a free port."
+msgstr "Kesalahan Nearby BookDrop: tidak dapat menemukan port yang tersedia."
+
+msgid "Nearby BookDrop failed to start."
+msgstr "Nearby BookDrop gagal dijalankan."
+
+msgid "Starting Nearby BookDrop…"
+msgstr "Memulai Nearby BookDrop…"
+
+msgid "Nearby BookDrop will start when Wi-Fi connects."
+msgstr "Nearby BookDrop akan dimulai saat Wi-Fi terhubung."
+
+msgid "… and %1 more"
+msgstr "…dan %1 lainnya"
+
+msgid "%1 wants to send you %2 file(s) (%3):"
+msgstr "%1 ingin mengirimi Anda %2 file (%3):"
+
+msgid "Accept"
+msgstr "Terima"
+
+msgid "Decline"
+msgstr "Tolak"
+
+msgid "Receiving %1 file(s) from %2…"
+msgstr "Menerima %1 file dari %2…"
+
+msgid "Nearby BookDrop: received %1 file(s), %2 failed."
+msgstr "Nearby BookDrop: menerima %1 file, %2 gagal."
+
+msgid "Nearby BookDrop transfer cancelled."
+msgstr "Transfer Nearby BookDrop dibatalkan."
+
+msgid "Nearby BookDrop: received %1 file(s)."
+msgstr "Nearby BookDrop: menerima %1 file."
+
+msgid "Nearby BookDrop not available on this device"
+msgstr "Nearby BookDrop tidak tersedia di perangkat ini"
+
+msgid "Scanning for nearby devices…"
+msgstr "Memindai perangkat terdekat…"
+
+msgid "No nearby devices found. Make sure the other device has Nearby BookDrop or LocalSend open."
+msgstr "Tidak ada perangkat terdekat yang ditemukan. Pastikan perangkat lain membuka Nearby BookDrop atau LocalSend."
+
+msgid "Rescan"
+msgstr "Pindai ulang"
+
+msgid "Send to…"
+msgstr "Kirim ke…"
+
+msgid "Sending…"
+msgstr "Mengirim…"
+
+msgid "Sending… %1%"
+msgstr "Mengirim… %1%"
+
+msgid "Sent %1 file(s)."
+msgstr "%1 file terkirim."
+
+msgid "The other device declined the transfer."
+msgstr "Perangkat lain menolak transfer."
+
+msgid "Transfer cancelled."
+msgstr "Transfer dibatalkan."
+
+msgid "Send failed: %1"
+msgstr "Pengiriman gagal: %1"
+
+msgid "Nearby BookDrop error: %1"
+msgstr "Kesalahan Nearby BookDrop: %1"
+
+msgid "Nearby BookDrop off"
+msgstr "Nearby BookDrop nonaktif"
+
+msgid "Visible as %1"
+msgstr "Terlihat sebagai %1"
+
+msgid "(limited discovery)"
+msgstr "(penemuan terbatas)"
 
 msgid "Checking for update…"
 msgstr "Memeriksa pembaruan…"

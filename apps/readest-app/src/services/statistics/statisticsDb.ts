@@ -13,7 +13,7 @@ interface BookRow extends DatabaseRow {
   pages: number;
 }
 
-type CursorKey = 'push' | 'pull';
+type CursorKey = 'push' | 'pull' | 'bookorbit-push';
 
 /**
  * Per-tab singleton open promise. OPFS permits only ONE access handle per file
@@ -52,10 +52,14 @@ export class StatisticsDb {
   static async open(appService: AppService): Promise<StatisticsDb> {
     bindLifecycle();
     if (!sharedDb) {
-      sharedDb = (async () => {
+      const opening = (async () => {
         const db = await appService.openDatabase('statistics', 'statistics.db', 'Data');
         return new StatisticsDb(db);
       })();
+      sharedDb = opening;
+      void opening.catch(() => {
+        if (sharedDb === opening) sharedDb = null;
+      });
     }
     return sharedDb;
   }
@@ -134,6 +138,57 @@ export class StatisticsDb {
        WHERE id = ?`,
       [idBook, idBook, idBook, idBook, idBook],
     );
+  }
+
+  /**
+   * Returns the median duration of time spent on each page in seconds. Returns
+   * `null` if sufficient data is not available.
+   *
+   * Use the median since reading times are skewed; thus the median must be
+   * used to get the middle value.
+   */
+  async getMedianPageDurationSecs(idBook: number): Promise<number | null> {
+    const PAGE_THRESHOLD = 5;
+    const rows = await this.db.select<{ duration: number }>(
+      `SELECT duration
+         FROM page_stat_data
+         WHERE id_book = ?
+         ORDER BY start_time DESC, page DESC
+         LIMIT 50`,
+      [idBook],
+    );
+    if (rows.length < PAGE_THRESHOLD) return null;
+    // The query orders by recency; sort by value so the middle is the true median.
+    const pageDurations = rows.map((d) => d['duration']).sort((a, b) => a - b);
+    const mid = Math.floor(pageDurations.length / 2);
+    return pageDurations.length % 2 !== 0
+      ? (pageDurations[mid] ?? 0)
+      : ((pageDurations[mid - 1] ?? 0) + (pageDurations[mid] ?? 0)) / 2;
+  }
+
+  /** Load shelf paces in one query, using the same last-50 sample as book labels. */
+  async getMedianPageDurationsSecs(): Promise<Record<string, number>> {
+    const rows = await this.db.select<{ md5: string; duration: number }>(
+      `SELECT md5, duration FROM (
+         SELECT b.md5, p.duration,
+           ROW_NUMBER() OVER (PARTITION BY p.id_book ORDER BY p.start_time DESC, p.page DESC) AS recency
+         FROM page_stat_data p JOIN book b ON b.id = p.id_book
+       ) WHERE recency <= 50 ORDER BY md5, duration`,
+    );
+    const samples = new Map<string, number[]>();
+    for (const { md5, duration } of rows) {
+      const durations = samples.get(md5) ?? [];
+      durations.push(duration);
+      samples.set(md5, durations);
+    }
+    const medians: Record<string, number> = {};
+    for (const [md5, durations] of samples) {
+      if (durations.length < 5) continue;
+      const mid = Math.floor(durations.length / 2);
+      medians[md5] =
+        durations.length % 2 ? durations[mid]! : (durations[mid - 1]! + durations[mid]!) / 2;
+    }
+    return medians;
   }
 
   async getBookByMd5(md5: string): Promise<BookRow | null> {

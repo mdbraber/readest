@@ -9,6 +9,7 @@ import { ReadwiseClient } from '@/services/readwise';
 import { READWISE_API_BASE_URL } from '@/services/constants';
 import SubPageHeader from '../SubPageHeader';
 import { SectionTitle, SettingLabel, Tips } from '../primitives';
+import { Toggle } from '@/components/primitives/toggle';
 
 interface ReadwiseFormProps {
   onBack: () => void;
@@ -93,6 +94,18 @@ const ReadwiseForm: React.FC<ReadwiseFormProps> = ({ onBack }) => {
     await saveSettings(envConfig, newSettings);
   };
 
+  const handleToggleCoverImage = async () => {
+    const newSettings = {
+      ...settings,
+      readwise: {
+        ...settings.readwise,
+        includeCoverImage: !(settings.readwise?.includeCoverImage ?? true),
+      },
+    };
+    setSettings(newSettings);
+    await saveSettings(envConfig, newSettings);
+  };
+
   const lastSyncedAt = settings.readwise?.lastSyncedAt ?? 0;
   const lastSyncedLabel = lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : _('Never');
 
@@ -128,11 +141,16 @@ const ReadwiseForm: React.FC<ReadwiseFormProps> = ({ onBack }) => {
             <div className='divide-base-200 divide-y'>
               <label className='flex min-h-14 items-center justify-between px-4'>
                 <SettingLabel>{_('Sync Enabled')}</SettingLabel>
-                <input
-                  type='checkbox'
-                  className='toggle'
+                <Toggle
                   checked={settings.readwise?.enabled ?? false}
                   onChange={handleToggleEnabled}
+                />
+              </label>
+              <label className='flex min-h-14 items-center justify-between px-4'>
+                <SettingLabel>{_('Include Book Cover')}</SettingLabel>
+                <Toggle
+                  checked={settings.readwise?.includeCoverImage ?? true}
+                  onChange={handleToggleCoverImage}
                 />
               </label>
               {configuredBaseUrl && (
@@ -158,7 +176,7 @@ const ReadwiseForm: React.FC<ReadwiseFormProps> = ({ onBack }) => {
                 'h-10 rounded-lg px-4 text-sm font-medium',
                 'text-error hover:bg-error/10',
                 'transition-colors duration-150',
-                'focus-visible:ring-error/40 focus-visible:outline-none focus-visible:ring-2',
+                'focus-visible:ring-error/40 focus-visible:outline-hidden focus-visible:ring-2',
               )}
             >
               {_('Disconnect')}
@@ -175,7 +193,7 @@ const ReadwiseForm: React.FC<ReadwiseFormProps> = ({ onBack }) => {
               id='readwise-token'
               type='password'
               placeholder={_('Paste your Readwise access token')}
-              className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+              className='input eink-bordered h-11 w-full text-sm focus:outline-hidden'
               spellCheck='false'
               value={accessToken}
               onChange={(e) => setAccessToken(e.target.value)}
@@ -205,7 +223,7 @@ const ReadwiseForm: React.FC<ReadwiseFormProps> = ({ onBack }) => {
                   type='url'
                   inputMode='url'
                   placeholder={READWISE_API_BASE_URL}
-                  className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+                  className='input eink-bordered h-11 w-full text-sm focus:outline-hidden'
                   spellCheck='false'
                   autoCapitalize='off'
                   value={baseUrl}
@@ -230,7 +248,7 @@ const ReadwiseForm: React.FC<ReadwiseFormProps> = ({ onBack }) => {
               className={clsx(
                 'btn btn-primary',
                 'h-10 min-h-10 rounded-lg border-0 px-5 text-sm font-medium',
-                'focus-visible:ring-primary/40 focus-visible:outline-none focus-visible:ring-2',
+                'focus-visible:ring-primary/40 focus-visible:outline-hidden focus-visible:ring-2',
                 isConnecting && 'opacity-60',
               )}
             >

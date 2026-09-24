@@ -27,6 +27,11 @@ export interface UseBackgroundAudioRequest {
   enabled: boolean;
 }
 
+export interface SetSelectionSuppressedRequest {
+  target: 'gesture' | 'menu';
+  suppressed: boolean;
+}
+
 export interface InstallPackageRequest {
   path: string;
 }
@@ -140,6 +145,36 @@ export async function invokeUseBackgroundAudio(request: UseBackgroundAudioReques
   });
 }
 
+/**
+ * Acquire or release the Android WifiManager MulticastLock so LocalSend
+ * discovery announcements are delivered. Android only; a no-op elsewhere
+ * (callers gate on isAndroidApp).
+ */
+export async function setMulticastLock(acquire: boolean): Promise<void> {
+  await invoke('plugin:native-bridge|set_multicast_lock', {
+    payload: { acquire },
+  });
+}
+
+// Suppress a piece of the OS text-selection UI that would fight the reader's
+// own selection UX:
+//  - target 'gesture' (iOS): the system long-press selection for non-editable
+//    content, while the instant-highlight quick action owns the hold. WebKit
+//    consults selectability before any touch handler runs, so JS-level
+//    suppression cannot win that race.
+//  - target 'menu' (Android, #5427): the floating selection ActionMode
+//    (Copy / Share / Select all), so it can't cover Readest's annotation
+//    toolbar. Chromium shows it through paths that never fire a cancelable
+//    `contextmenu` event, so DOM-level preventDefault can't stop it;
+//    MainActivity refuses floating action modes while this flag is set.
+export async function setSelectionSuppressed(
+  request: SetSelectionSuppressedRequest,
+): Promise<void> {
+  await invoke('plugin:native-bridge|set_selection_suppressed', {
+    payload: request,
+  });
+}
+
 export async function installPackage(
   request: InstallPackageRequest,
 ): Promise<InstallPackageResponse> {
@@ -207,6 +242,10 @@ export async function getSafeAreaInsets(): Promise<GetSafeAreaInsetsResponse> {
   return result;
 }
 
+export async function setScreenWakeLock(enabled: boolean): Promise<void> {
+  await invoke('plugin:native-bridge|set_screen_wake_lock', { payload: { enabled } });
+}
+
 export async function getScreenBrightness(): Promise<GetScreenBrightnessResponse> {
   const result = await invoke<GetScreenBrightnessResponse>(
     'plugin:native-bridge|get_screen_brightness',
@@ -226,6 +265,32 @@ export async function setScreenBrightness(
   return result;
 }
 
+export interface HasAmbientLightSensorResponse {
+  available: boolean;
+  error?: string;
+}
+
+export interface AmbientLightUpdatesResponse {
+  success: boolean;
+  error?: string;
+}
+
+export interface AmbientLightPayload {
+  lux: number;
+}
+
+export async function hasAmbientLightSensor(): Promise<HasAmbientLightSensorResponse> {
+  return invoke<HasAmbientLightSensorResponse>('plugin:native-bridge|has_ambient_light_sensor');
+}
+
+export async function startAmbientLightUpdates(): Promise<AmbientLightUpdatesResponse> {
+  return invoke<AmbientLightUpdatesResponse>('plugin:native-bridge|start_ambient_light_updates');
+}
+
+export async function stopAmbientLightUpdates(): Promise<AmbientLightUpdatesResponse> {
+  return invoke<AmbientLightUpdatesResponse>('plugin:native-bridge|stop_ambient_light_updates');
+}
+
 export async function getExternalSDCardPath(): Promise<GetExternalSDCardPathResponse> {
   const result = await invoke<GetExternalSDCardPathResponse>(
     'plugin:native-bridge|get_external_sdcard_path',
@@ -236,6 +301,14 @@ export async function getExternalSDCardPath(): Promise<GetExternalSDCardPathResp
 export async function selectDirectory(): Promise<SelectDirectoryResponse> {
   const result = await invoke<SelectDirectoryResponse>('plugin:native-bridge|select_directory');
   return result;
+}
+
+// Android only. Opens the system document picker fire-and-forget; the picked
+// URIs come back as a `file-picker-result` plugin event (see
+// useAndroidPickedBooks) so they survive the activity/process being torn down
+// while the picker is in the foreground (#1217).
+export async function showFilePicker(): Promise<void> {
+  await invoke('plugin:native-bridge|show_file_picker');
 }
 
 export async function getStorefrontRegionCode(): Promise<GetStorefrontRegionCodeResponse> {
@@ -277,6 +350,29 @@ export async function captureWebviewRegion(
   return await invoke<ArrayBuffer>('plugin:native-bridge|capture_webview_region', {
     payload: request,
   });
+}
+
+export interface CoverWebviewRegionResponse {
+  token: number;
+}
+
+/**
+ * Freeze the on-screen pixels of a webview region behind a native snapshot
+ * view that `captureWebviewRegion` does not see (iOS only so far). The
+ * two-column page curl uses it to capture the incoming column under its
+ * overlay without ever showing it (#6106). Rejects where unimplemented.
+ */
+export async function coverWebviewRegion(
+  request: CaptureWebviewRegionRequest,
+): Promise<CoverWebviewRegionResponse> {
+  return await invoke<CoverWebviewRegionResponse>('plugin:native-bridge|cover_webview_region', {
+    payload: request,
+  });
+}
+
+/** Remove the cover put up by `coverWebviewRegion`; stale tokens are ignored. */
+export async function uncoverWebviewRegion(request: { token: number }): Promise<void> {
+  await invoke('plugin:native-bridge|uncover_webview_region', { payload: request });
 }
 
 // ── Sync passphrase keychain ────────────────────────────────────────────
@@ -417,4 +513,30 @@ export async function installNightlyUpdate(
   const channel = new Channel<NightlyProgress>();
   if (onProgress) channel.onmessage = onProgress;
   await invoke<void>('install_nightly_update', { endpoint, channel });
+}
+
+export interface ICloudContainerStatusResponse {
+  available: boolean;
+  documentsPath?: string;
+}
+
+export interface ICloudEnsureDownloadedRequest {
+  path: string;
+  timeoutMs?: number;
+}
+
+export interface ICloudEnsureDownloadedResponse {
+  status: 'ready' | 'notFound' | 'timeout';
+}
+
+export async function getICloudContainerStatus(): Promise<ICloudContainerStatusResponse> {
+  return invoke<ICloudContainerStatusResponse>('plugin:native-bridge|icloud_container_status');
+}
+
+export async function icloudEnsureDownloaded(
+  request: ICloudEnsureDownloadedRequest,
+): Promise<ICloudEnsureDownloadedResponse> {
+  return invoke<ICloudEnsureDownloadedResponse>('plugin:native-bridge|icloud_ensure_downloaded', {
+    payload: request,
+  });
 }

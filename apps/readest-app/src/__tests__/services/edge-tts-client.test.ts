@@ -38,6 +38,15 @@ vi.mock('@/utils/ssml', () => ({
 
 vi.mock('@/utils/misc', () => ({
   getUserLocale: vi.fn((lang: string) => (lang === 'en' ? 'en-US' : lang)),
+  // Pins the WebAudioPlayer path: iOS Tauri selects the native playout.
+  getOSPlatform: vi.fn(() => 'macos'),
+  stubTranslation: (key: string) => key,
+}));
+
+let tauriPlatform = false;
+vi.mock('@/services/environment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/environment')>()),
+  isTauriAppPlatform: () => tauriPlatform,
 }));
 
 vi.mock('@/services/tts/TTSUtils', async (importOriginal) => {
@@ -67,6 +76,7 @@ describe('EdgeTTSClient', () => {
   let client: EdgeTTSClient;
 
   beforeEach(() => {
+    tauriPlatform = false;
     createBehavior = () => Promise.resolve(undefined);
     createAudioDataBehavior = vi.fn<() => Promise<MockAudioData>>(() =>
       Promise.resolve({ data: new ArrayBuffer(8), boundaries: [] }),
@@ -76,6 +86,7 @@ describe('EdgeTTSClient', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -103,6 +114,36 @@ describe('EdgeTTSClient', () => {
   });
 
   describe('init', () => {
+    test('a hung native Edge probe stops blocking initialization after five seconds', async () => {
+      vi.useFakeTimers();
+      tauriPlatform = true;
+      let completeProbe!: () => void;
+      createBehavior = () =>
+        new Promise<undefined>((resolve) => {
+          completeProbe = () => resolve(undefined);
+        });
+      let result: boolean | undefined;
+      const init = client.init().then((value) => {
+        result = value;
+      });
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result).toBe(false);
+      await init;
+      expect(await client.getAllVoices()).toHaveLength(4);
+      completeProbe();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.initialized).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    test('a successful probe clears its deadline timer', async () => {
+      vi.useFakeTimers();
+      await expect(client.init()).resolves.toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
     test('succeeds when create resolves and sets initialized to true', async () => {
       const result = await client.init();
       expect(result).toBe(true);
@@ -138,6 +179,27 @@ describe('EdgeTTSClient', () => {
       expect(callCount).toBe(2);
     });
 
+    test('wss failure does not fall back to https on Tauri even when authenticated', async () => {
+      tauriPlatform = true;
+      const mockController = {
+        isAuthenticated: true,
+        dispatchEvent: vi.fn(),
+      } as unknown as TTSController;
+      const c = new EdgeTTSClient(mockController);
+
+      let callCount = 0;
+      createBehavior = () => {
+        callCount++;
+        return Promise.reject(new Error('offline'));
+      };
+
+      const result = await c.init();
+      expect(result).toBe(false);
+      // Only the wss probe ran: the /api/tts/edge proxy must not be requested
+      // from the Tauri app (its native wss transport is the only Edge path).
+      expect(callCount).toBe(1);
+    });
+
     test('wss failure dispatches tts-need-auth when not authenticated', async () => {
       const dispatchEvent = vi.fn();
       const mockController = {
@@ -171,30 +233,6 @@ describe('EdgeTTSClient', () => {
     });
   });
 
-  describe('setRate', () => {
-    test('stores rate value', async () => {
-      await client.setRate(1.5);
-      // Rate is private, so we verify indirectly - no error thrown
-      await expect(client.setRate(0.5)).resolves.toBeUndefined();
-    });
-
-    test('accepts boundary values', async () => {
-      await expect(client.setRate(0.5)).resolves.toBeUndefined();
-      await expect(client.setRate(2.0)).resolves.toBeUndefined();
-    });
-  });
-
-  describe('setPitch', () => {
-    test('stores pitch value', async () => {
-      await expect(client.setPitch(1.2)).resolves.toBeUndefined();
-    });
-
-    test('accepts boundary values', async () => {
-      await expect(client.setPitch(0.5)).resolves.toBeUndefined();
-      await expect(client.setPitch(1.5)).resolves.toBeUndefined();
-    });
-  });
-
   describe('setVoice', () => {
     test('sets voice when voice id exists in voice list', async () => {
       await client.init();
@@ -208,30 +246,11 @@ describe('EdgeTTSClient', () => {
       await client.setVoice('nonexistent-voice');
       expect(client.getVoiceId()).toBe('en-US-AriaNeural');
     });
-
-    test('voice id remains empty when no voice has been set', () => {
-      expect(client.getVoiceId()).toBe('');
-    });
-  });
-
-  describe('setPrimaryLang', () => {
-    test('sets primary language', () => {
-      client.setPrimaryLang('fr');
-      // No public getter for primaryLang, but we verify no error
-      // The effect is observed when speak() uses it
-    });
-
-    test('accepts any language string', () => {
-      client.setPrimaryLang('zh-CN');
-      client.setPrimaryLang('ja');
-      client.setPrimaryLang('en');
-      // No error thrown
-    });
   });
 
   describe('supportsWordBoundaries', () => {
     test('returns true (Edge reports word-boundary timings)', () => {
-      expect(client.supportsWordBoundaries()).toBe(true);
+      expect(client.getCapabilities().wordBoundaries).toBe(true);
     });
   });
 
@@ -433,7 +452,10 @@ describe('EdgeTTSClient', () => {
       parsedMarks = [{ name: 'mark-0', text: 'hello', language: 'en' }];
       createAudioDataBehavior = vi.fn(() => Promise.reject(new Error('network error')));
 
-      await consumePreload(client, new AbortController().signal);
+      vi.useFakeTimers();
+      const preload = consumePreload(client, new AbortController().signal);
+      await vi.runAllTimersAsync();
+      await preload;
 
       expect(createAudioDataBehavior).toHaveBeenCalledTimes(3);
     });
@@ -458,7 +480,10 @@ describe('EdgeTTSClient', () => {
           : Promise.resolve({ data: new ArrayBuffer(8), boundaries: [] });
       });
 
-      await consumePreload(client, new AbortController().signal);
+      vi.useFakeTimers();
+      const preload = consumePreload(client, new AbortController().signal);
+      await vi.runAllTimersAsync();
+      await preload;
 
       expect(createAudioDataBehavior).toHaveBeenCalledTimes(2);
     });

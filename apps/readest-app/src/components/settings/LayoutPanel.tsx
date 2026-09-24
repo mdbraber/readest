@@ -17,6 +17,7 @@ import { lockScreenOrientation } from '@/utils/bridge';
 import { saveViewSettings } from '@/helpers/settings';
 import { getBookDirFromWritingMode, getBookLangCode } from '@/utils/book';
 import { MIGHT_BE_RTL_LANGS } from '@/services/constants';
+import { isHexColor } from '@/app/reader/utils/headerFooterStyle';
 import { SettingsPanelPanelProp } from './SettingsDialog';
 import {
   BoxedList,
@@ -26,6 +27,8 @@ import {
   SettingsSwitchRow,
 } from './primitives';
 import NumberInput from './NumberInput';
+import ColorInput from './theme/ColorInput';
+import { Toggle } from '../primitives/toggle';
 
 const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }) => {
   const _ = useTranslation();
@@ -86,9 +89,31 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
   const [showBatteryPercentage, setShowBatteryPercentage] = useState(
     viewSettings.showBatteryPercentage,
   );
-  const [tapToToggleFooter, setTapToToggleFooter] = useState(viewSettings.tapToToggleFooter);
   const [progressStyle, setProgressStyle] = useState(viewSettings.progressStyle);
   const [referencePageCount, setReferencePageCount] = useState(viewSettings.referencePageCount);
+  const [headerFooterFontSize, setHeaderFooterFontSize] = useState(
+    viewSettings.headerFooterFontSize,
+  );
+  const [headerFooterTextColor, setHeaderFooterTextColor] = useState(
+    viewSettings.headerFooterTextColor,
+  );
+  const [headerFooterBackground, setHeaderFooterBackground] = useState(
+    viewSettings.headerFooterBackground,
+  );
+  const [headerFooterBgOpacity, setHeaderFooterBgOpacity] = useState(
+    viewSettings.headerFooterBgOpacity,
+  );
+  // The stored fields carry both the mode and the color, so the last hex the
+  // reader picked has to survive a trip through Auto/None to come back on the
+  // next Custom without resetting to gray.
+  const [lastTextColor, setLastTextColor] = useState(
+    isHexColor(viewSettings.headerFooterTextColor) ? viewSettings.headerFooterTextColor : '#808080',
+  );
+  const [lastBgColor, setLastBgColor] = useState(
+    isHexColor(viewSettings.headerFooterBackground)
+      ? viewSettings.headerFooterBackground
+      : '#808080',
+  );
   const [screenOrientation, setScreenOrientation] = useState(viewSettings.screenOrientation);
 
   const resetToDefaults = useResetViewSettings();
@@ -128,7 +153,10 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
       use24HourClock: setUse24HourClock,
       showCurrentBatteryStatus: setShowCurrentBatteryStatus,
       showBatteryPercentage: setShowBatteryPercentage,
-      tapToToggleFooter: setTapToToggleFooter,
+      headerFooterFontSize: setHeaderFooterFontSize,
+      headerFooterTextColor: setHeaderFooterTextColor,
+      headerFooterBackground: setHeaderFooterBackground,
+      headerFooterBgOpacity: setHeaderFooterBgOpacity,
     });
   };
 
@@ -413,9 +441,52 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
   }, [referencePageCount]);
 
   useEffect(() => {
-    saveViewSettings(envConfig, bookKey, 'tapToToggleFooter', tapToToggleFooter, false, false);
+    saveViewSettings(
+      envConfig,
+      bookKey,
+      'headerFooterFontSize',
+      headerFooterFontSize,
+      false,
+      false,
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tapToToggleFooter]);
+  }, [headerFooterFontSize]);
+
+  useEffect(() => {
+    saveViewSettings(
+      envConfig,
+      bookKey,
+      'headerFooterTextColor',
+      headerFooterTextColor,
+      false,
+      false,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [headerFooterTextColor]);
+
+  useEffect(() => {
+    saveViewSettings(
+      envConfig,
+      bookKey,
+      'headerFooterBackground',
+      headerFooterBackground,
+      false,
+      false,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [headerFooterBackground]);
+
+  useEffect(() => {
+    saveViewSettings(
+      envConfig,
+      bookKey,
+      'headerFooterBgOpacity',
+      headerFooterBgOpacity,
+      false,
+      false,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [headerFooterBgOpacity]);
 
   useEffect(() => {
     if (showHeader === viewSettings.showHeader) return;
@@ -462,12 +533,7 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
         className='flex items-center justify-between px-4'
       >
         <SettingLabel>{_('Override Book Layout')}</SettingLabel>
-        <input
-          type='checkbox'
-          className='toggle'
-          checked={overrideLayout}
-          onChange={() => setOverrideLayout(!overrideLayout)}
-        />
+        <Toggle checked={overrideLayout} onChange={() => setOverrideLayout(!overrideLayout)} />
       </div>
       {mightBeRTLBook && (
         <div
@@ -521,11 +587,11 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
           <SettingsRow label={_('Border Color')}>
             <div className='flex gap-4'>
               <button
-                className={`btn btn-circle btn-sm bg-red-300 hover:bg-red-500 ${borderColor === 'red' ? 'btn-active !bg-red-500' : ''}`}
+                className={`btn btn-circle btn-sm bg-red-300 hover:bg-red-500 ${borderColor === 'red' ? 'btn-active bg-red-500!' : ''}`}
                 onClick={() => setBorderColor('red')}
               ></button>
               <button
-                className={`btn btn-circle btn-sm bg-black/50 hover:bg-black ${borderColor === 'black' ? 'btn-active !bg-black' : ''}`}
+                className={`btn btn-circle btn-sm bg-black/50 hover:bg-black ${borderColor === 'black' ? 'btn-active bg-black!' : ''}`}
                 onClick={() => setBorderColor('black')}
               ></button>
             </div>
@@ -614,9 +680,11 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
           value={showHeader && !isVertical ? marginTopPx : compactMarginTopPx}
           onChange={showHeader && !isVertical ? setMarginTopPx : setCompactMarginTopPx}
           min={
-            showHeader && !isVertical ? Math.max(0, Math.round((16 - gridInsets.top) / 4) * 4) : 0
+            showHeader && !isVertical
+              ? Math.max(0, Math.round((16 - gridInsets.top) / 4) * 4) - gridInsets.top
+              : 0
           }
-          max={88}
+          max={144}
           step={4}
         />
         <NumberInput
@@ -625,10 +693,10 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
           onChange={showFooter && !isVertical ? setMarginBottomPx : setCompactMarginBottomPx}
           min={
             showFooter && !isVertical
-              ? Math.max(0, Math.round((16 - gridInsets.bottom) / 4) * 4)
+              ? Math.max(0, Math.round((16 - gridInsets.bottom) / 4) * 4) - gridInsets.bottom
               : 0
           }
-          max={88}
+          max={144}
           step={4}
         />
         <NumberInput
@@ -636,7 +704,7 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
           value={showFooter && isVertical ? marginLeftPx : compactMarginLeftPx}
           onChange={showFooter && isVertical ? setMarginLeftPx : setCompactMarginLeftPx}
           min={0}
-          max={88}
+          max={144}
           step={4}
         />
         <NumberInput
@@ -644,11 +712,11 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
           value={showHeader && isVertical ? marginRightPx : compactMarginRightPx}
           onChange={showHeader && isVertical ? setMarginRightPx : setCompactMarginRightPx}
           min={0}
-          max={88}
+          max={144}
           step={4}
         />
         <NumberInput
-          label={_('Column Gap (%)')}
+          label={_('Additional Margin (%)')}
           value={gapPercent}
           onChange={setGapPercent}
           min={0}
@@ -698,7 +766,7 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
           data-setting-id='settings.layout.showFooter'
         />
         <SettingsSwitchRow
-          label={_('Show Remaining Time')}
+          label={_('Remaining Time')}
           checked={showRemainingTime}
           disabled={!showFooter}
           onChange={() => {
@@ -711,7 +779,7 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
           }}
         />
         <SettingsSwitchRow
-          label={_('Show Remaining Pages')}
+          label={_('Remaining Pages')}
           checked={showRemainingPages}
           disabled={!showFooter}
           onChange={() => {
@@ -724,7 +792,7 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
           }}
         />
         <SettingsSwitchRow
-          label={_('Show Reading Progress')}
+          label={_('Reading Progress')}
           checked={showProgressInfo}
           disabled={!showFooter}
           onChange={() => setShowProgressInfo(!showProgressInfo)}
@@ -757,14 +825,14 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
           />
         )}
         <SettingsSwitchRow
-          label={_('Show Progress Bar')}
+          label={_('Progress Bar')}
           checked={showStickyProgressBar}
           disabled={!showFooter}
           onChange={() => setShowStickyProgressBar(!showStickyProgressBar)}
           data-setting-id='settings.layout.showStickyProgressBar'
         />
         <SettingsSwitchRow
-          label={_('Show Current Time')}
+          label={_('Current Time')}
           checked={showCurrentTime}
           disabled={!showFooter}
           onChange={() => setShowCurrentTime(!showCurrentTime)}
@@ -778,23 +846,97 @@ const LayoutPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRese
           />
         )}
         <SettingsSwitchRow
-          label={_('Show Current Battery Status')}
+          label={_('Battery Status')}
           checked={showCurrentBatteryStatus}
           disabled={!showFooter}
           onChange={() => setShowCurrentBatteryStatus(!showCurrentBatteryStatus)}
         />
         <SettingsSwitchRow
-          label={_('Show Battery Percentage')}
+          label={_('Battery Percentage')}
           checked={showBatteryPercentage}
           disabled={!showFooter || !showCurrentBatteryStatus}
           onChange={() => setShowBatteryPercentage(!showBatteryPercentage)}
         />
-        <SettingsSwitchRow
-          label={_('Tap to Toggle Footer')}
-          checked={tapToToggleFooter}
-          disabled={!showFooter}
-          onChange={() => setTapToToggleFooter(!tapToToggleFooter)}
+        <NumberInput
+          label={_('Font Size')}
+          value={headerFooterFontSize}
+          onChange={setHeaderFooterFontSize}
+          min={8}
+          max={24}
+          data-setting-id='settings.layout.headerFooterFontSize'
         />
+        {/* Swatch and select are siblings, not nested together in a wrapper:
+            the select's own `max-w-[60%]` resolves against its containing
+            block, so a shared wrapper shrinks it until the labels truncate.
+            `ms-auto` collapses the free space the row's `justify-between`
+            would otherwise put in front of the swatch, so swatches line up
+            across rows instead of following each label's width. */}
+        <SettingsRow label={_('Text Color')}>
+          {isHexColor(headerFooterTextColor) && (
+            <div className='ms-auto'>
+              <ColorInput
+                label={_('Text Color')}
+                value={headerFooterTextColor}
+                onChange={(color) => {
+                  setLastTextColor(color);
+                  setHeaderFooterTextColor(color);
+                }}
+                pickerPosition='right'
+              />
+            </div>
+          )}
+          <SettingsSelect
+            value={isHexColor(headerFooterTextColor) ? 'custom' : 'auto'}
+            onChange={(e) =>
+              setHeaderFooterTextColor(e.target.value === 'custom' ? lastTextColor : '')
+            }
+            ariaLabel={_('Text Color')}
+            options={[
+              { value: 'auto', label: _('Auto') },
+              { value: 'custom', label: _('Custom') },
+            ]}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label={_('Background Color')}
+          data-setting-id='settings.layout.headerFooterBackground'
+        >
+          {isHexColor(headerFooterBackground) && (
+            <div className='ms-auto'>
+              <ColorInput
+                label={_('Background Color')}
+                value={headerFooterBackground}
+                onChange={(color) => {
+                  setLastBgColor(color);
+                  setHeaderFooterBackground(color);
+                }}
+                pickerPosition='right'
+              />
+            </div>
+          )}
+          <SettingsSelect
+            value={isHexColor(headerFooterBackground) ? 'custom' : headerFooterBackground}
+            onChange={(e) =>
+              setHeaderFooterBackground(e.target.value === 'custom' ? lastBgColor : e.target.value)
+            }
+            ariaLabel={_('Background Color')}
+            options={[
+              { value: 'auto', label: _('Auto') },
+              { value: 'none', label: _('None') },
+              { value: 'custom', label: _('Custom') },
+            ]}
+          />
+        </SettingsRow>
+        {isHexColor(headerFooterBackground) && (
+          <NumberInput
+            label={_('Opacity')}
+            value={headerFooterBgOpacity}
+            onChange={setHeaderFooterBgOpacity}
+            min={0.1}
+            max={1}
+            step={0.05}
+          />
+        )}
       </BoxedList>
 
       {appService?.hasOrientationLock && (

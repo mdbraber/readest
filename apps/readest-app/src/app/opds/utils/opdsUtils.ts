@@ -30,6 +30,11 @@ export const MIME = {
   OPDS2: 'application/opds+json',
 };
 
+export const getSafeDOMParserMimeType = (mimeType: string): DOMParserSupportedType =>
+  mimeType.toLowerCase().includes('xml')
+    ? (MIME.XML as DOMParserSupportedType)
+    : (mimeType as DOMParserSupportedType);
+
 export const enum VALIDATION_ERROR {
   INVALID_URL = 'Invalid URL format',
   LOAD_FAILED = 'Failed to load OPDS feed',
@@ -110,7 +115,7 @@ const hasXMLParseError = (doc: Document): boolean =>
  * callers fall through to their existing HTML/non-OPDS handling.
  */
 export const parseOPDSXML = (text: string): Document => {
-  const doc = new DOMParser().parseFromString(text, MIME.XML as DOMParserSupportedType);
+  const doc = new DOMParser().parseFromString(text, getSafeDOMParserMimeType(MIME.XML));
   if (!hasXMLParseError(doc)) return doc;
 
   const rootMatch = text.match(/<([A-Za-z_][\w.:-]*)/);
@@ -121,7 +126,7 @@ export const parseOPDSXML = (text: string): Document => {
     const closeIdx = text.lastIndexOf(closeTag);
     if (closeIdx > startIdx) {
       const sliced = text.slice(startIdx, closeIdx + closeTag.length);
-      const retry = new DOMParser().parseFromString(sliced, MIME.XML as DOMParserSupportedType);
+      const retry = new DOMParser().parseFromString(sliced, getSafeDOMParserMimeType(MIME.XML));
       if (!hasXMLParseError(retry)) return retry;
     }
   }
@@ -138,6 +143,13 @@ export const parseOPDSXML = (text: string): Document => {
 export const getOPDSNavLink = (
   links?: Array<{ href?: string; type?: string }>,
 ): string | undefined => links?.find((link) => link.href && isOPDSCatalog(link.type ?? ''))?.href;
+
+/**
+ * Calibre stores commas in contributor names escaped as pipes (`Doe, John` →
+ * `Doe| John`), and Calibre-Web serves that raw form in its OPDS feeds
+ * (readest issue #5183). Restore the commas for display.
+ */
+export const formatContributorName = (name: string): string => name.replace(/\|/g, ',');
 
 export const isSearchLink = (link: OPDSBaseLink): boolean => {
   const rels = Array.isArray(link.rel) ? link.rel : [link.rel || ''];
@@ -167,6 +179,32 @@ export const expandOPDSSearchTemplate = (templateHref: string, queryTerm: string
   return expandURITemplate(templateHref, new Map([[textVar, queryTerm]]));
 };
 
+/**
+ * Decode the percent-encoded placeholder braces in an OpenSearch description's
+ * `Url` templates.
+ *
+ * Some catalogs (a Nextcloud-hosted Calibre2OPDS instance in readest issue
+ * #5500) publish their template with the braces escaped -- e.g.
+ * `...?query=%7BsearchTerms%7D` instead of `...?query={searchTerms}`. foliate-js
+ * only recognizes literal braces, so the placeholder is never treated as a
+ * parameter: the search form shows no fields and the request goes out with the
+ * placeholder intact, making the catalog search for the literal string
+ * `{searchTerms}`.
+ *
+ * Only `%7B`/`%7D` are decoded, so any other escape in the template (an encoded
+ * path segment, a URL passed as a query parameter) is preserved as sent.
+ */
+export const normalizeOpenSearchTemplates = (doc: Document): Document => {
+  for (const el of Array.from(doc.documentElement.children)) {
+    if (el.localName !== 'Url') continue;
+    const template = el.getAttribute('template');
+    if (!template) continue;
+    const decoded = template.replace(/%7b/gi, '{').replace(/%7d/gi, '}');
+    if (decoded !== template) el.setAttribute('template', decoded);
+  }
+  return doc;
+};
+
 export const resolveURL = (url: string, relativeTo: string): string => {
   if (!url) return '';
   if (relativeTo.includes('/api/opds/proxy?url=')) {
@@ -175,7 +213,25 @@ export const resolveURL = (url: string, relativeTo: string): string => {
     return resolveURL(url, proxiedURL);
   }
   try {
-    if (relativeTo.includes(':')) return new URL(url, relativeTo).toString();
+    if (relativeTo.includes(':')) {
+      const resolved = new URL(url, relativeTo);
+      const base = new URL(relativeTo);
+      // Some catalogs are only reachable over HTTPS yet publish absolute
+      // `http://` links to themselves. bookserver.mek.oszk.hu (readest issue
+      // #5300) 301-redirects every plain-HTTP request to an unrelated host that
+      // 404s, so following those links breaks navigation. When the feed itself
+      // came over HTTPS, keep same-host links on HTTPS -- the upgrade browsers
+      // already apply to mixed content. Cross-host links are left alone so this
+      // can never silently retarget a request.
+      if (
+        base.protocol === 'https:' &&
+        resolved.protocol === 'http:' &&
+        resolved.host === base.host
+      ) {
+        resolved.protocol = 'https:';
+      }
+      return resolved.toString();
+    }
     const root = 'https://invalid.invalid/';
     const obj = new URL(url, root + relativeTo);
     obj.search = '';
@@ -250,7 +306,7 @@ export const validateOPDSURL = async (
         // Check for HTML with OPDS link
         const contentType = res.headers.get('Content-Type') ?? MIME.HTML;
         const type = parseMediaType(contentType)?.mediaType ?? MIME.HTML;
-        const htmlDoc = new DOMParser().parseFromString(text, type as DOMParserSupportedType);
+        const htmlDoc = new DOMParser().parseFromString(text, getSafeDOMParserMimeType(type));
 
         if (!htmlDoc.head) {
           return {

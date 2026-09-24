@@ -14,12 +14,20 @@ if (isDev) {
 }
 
 const exportOutput = appPlatform !== 'web' && !isDev;
+// Fork: the self-hosted Docker image runs the full Node server (`pnpm start-web`)
+// rather than upstream's standalone tree, so gate the self-hosted request-body
+// budget on SELF_HOSTED (set in the Dockerfile build stage) instead.
+const selfHostedServer = !exportOutput && process.env['SELF_HOSTED'] === 'true';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Ensure Next.js uses SSG instead of SSR
   // https://nextjs.org/docs/pages/building-your-application/deploying/static-exports
   output: exportOutput ? 'export' : undefined,
+  // Emit browser source maps for the Tauri export build so Sentry can
+  // symbolicate crashes. `scripts/upload-sourcemaps.mjs` uploads them after the
+  // build and strips the .map files, so they never ship inside the app bundle.
+  productionBrowserSourceMaps: exportOutput,
   pageExtensions: exportOutput ? ['jsx', 'tsx'] : ['js', 'jsx', 'ts', 'tsx'],
   // Note: This feature is required to use the Next.js Image component in SSG mode.
   // See https://nextjs.org/docs/messages/export-image-api for different workarounds.
@@ -30,13 +38,33 @@ const nextConfig = {
   experimental: {
     turbopackFileSystemCacheForDev: true,
     turbopackFileSystemCacheForBuild: true,
+    // `middleware.ts` matches /api/*, so Next buffers a clone of every request
+    // body to let both the middleware and the route handler read it. Past this
+    // limit the clone is truncated and the handler sees a short body ending
+    // cleanly — an upload that "succeeds" while storing a corrupt file, with no
+    // error to the client (#6091).
+    //
+    // The clone is buffered in memory before any handler can reject it, which
+    // makes this ceiling an unauthenticated memory budget on every /api/* route
+    // — so only the self-hosted image, which may proxy whole book files through
+    // the Node server, gets real headroom. `selfHostedServer` is the right gate
+    // because SELF_HOSTED is set at build time by the Dockerfile alone: web.readest.com
+    // runs on Cloudflare/Vercel, never on that image. (This value is baked into
+    // required-server-files.json at build time, so a runtime env var could not
+    // do the same job.)
+    //
+    // 32MB is deliberately under SEND_INBOX_FILE_MAX_BYTES (40MB): the only
+    // build that both runs the Node server and takes that route is a plain
+    // `next start`, since Cloudflare and Vercel never reach this code path, so
+    // the tighter budget is worth more there than the last 8MB of an upload.
+    proxyClientMaxBodySize: selfHostedServer ? 1024 * 1024 * 1024 : 32 * 1024 * 1024,
   },
   // Configure assetPrefix or else the server won't properly resolve your assets.
   assetPrefix: '',
   reactStrictMode: true,
   serverExternalPackages: ['isows'],
   allowedDevOrigins: ['192.168.2.120'],
-  webpack: (config) => {
+  webpack: (config, { isServer }) => {
     config.resolve.alias = {
       ...config.resolve.alias,
       nunjucks: 'nunjucks/browser/nunjucks.js',
@@ -45,7 +73,10 @@ const nextConfig = {
       // Without an alias, webpack walks up from that source location and
       // can't find fflate (only installed in this app's node_modules).
       fflate: path.resolve(__dirname, 'node_modules/fflate'),
-      ...(appPlatform !== 'web' ? { '@tursodatabase/database-wasm': false } : {}),
+      ...(appPlatform !== 'web' ? { '@readest/turso-database-wasm/webpack': false } : {}),
+      ...(isServer && appPlatform === 'web'
+        ? { '@readest/turso-database-wasm/webpack': false, 'jieba-wasm': false }
+        : {}),
       ...(appPlatform === 'web' ? { 'tauri-plugin-turso': false } : {}),
     };
     return config;
@@ -56,7 +87,12 @@ const nextConfig = {
       // Turbopack rejects absolute paths in resolveAlias ("server relative
       // imports not implemented") — use a project-relative path.
       fflate: './node_modules/fflate',
-      ...(appPlatform !== 'web' ? { '@tursodatabase/database-wasm': './src/utils/stub.ts' } : {}),
+      // Only the web build stores its database in turso's WASM build; Tauri
+      // embeds every file in `out/`, so emitting the unused WASM there would
+      // ship it inside the app.
+      ...(appPlatform !== 'web'
+        ? { '@readest/turso-database-wasm/webpack': './src/utils/stub.ts' }
+        : {}),
       ...(appPlatform === 'web' ? { 'tauri-plugin-turso': './src/utils/stub.ts' } : {}),
     },
   },
@@ -123,6 +159,10 @@ const nextConfig = {
       {
         source: '/_next/static/:path*',
         headers: [
+          {
+            key: 'Cross-Origin-Embedder-Policy',
+            value: 'require-corp',
+          },
           {
             key: 'Cache-Control',
             value: isDev

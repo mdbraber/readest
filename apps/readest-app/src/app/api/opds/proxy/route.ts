@@ -1,10 +1,15 @@
 import { READEST_OPDS_USER_AGENT } from '@/services/constants';
 import { NextRequest, NextResponse } from 'next/server';
-import { deserializeOPDSCustomHeaders } from '@/app/opds/utils/customHeaders';
+import { deserializeCustomHeaders } from '@/utils/customHeaders';
 import { isBlockedHost } from '@/utils/network';
 
 // Cap redirect hops so the SSRF host check below can re-run on every one.
 const MAX_REDIRECTS = 5;
+
+// In `next dev` the server runs on the developer's own machine, where a LAN
+// OPDS catalog is the normal use case (the CatalogManager UI only forbids
+// adding LAN URLs in production builds), so the host blocklist is skipped.
+const isPrivateHostAllowed = () => process.env.NODE_ENV === 'development';
 
 /**
  * Fetch the target while running the SSRF host check on every redirect hop.
@@ -15,22 +20,69 @@ const MAX_REDIRECTS = 5;
  */
 class SsrfBlockedError extends Error {}
 
+const sanitizeXmlBuffer = (buf: ArrayBuffer): ArrayBuffer => {
+  let text = '';
+  const bytes = new Uint8Array(buf);
+  for (const byte of bytes) text += String.fromCharCode(byte);
+
+  let out = '';
+  let inCdata = false;
+  for (let i = 0; i < text.length; i++) {
+    if (!inCdata && text.startsWith('<![CDATA[', i)) {
+      inCdata = true;
+      out += '<![CDATA[';
+      i += '<![CDATA['.length - 1;
+      continue;
+    }
+    if (inCdata && text.startsWith(']]>', i)) {
+      inCdata = false;
+      out += ']]>';
+      i += ']]>'.length - 1;
+      continue;
+    }
+    if (
+      !inCdata &&
+      text[i] === '&' &&
+      !text.slice(i).match(/^&(amp|lt|gt|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);/)
+    ) {
+      out += '&amp;';
+      continue;
+    }
+    out += text[i];
+  }
+
+  const outBytes = new Uint8Array(out.length);
+  for (let i = 0; i < out.length; i++) outBytes[i] = out.charCodeAt(i) & 0xff;
+  return outBytes.buffer;
+};
+
 async function fetchFollowingRedirects(
   startUrl: string,
   init: { method: 'GET' | 'HEAD'; headers: Headers; signal: AbortSignal },
 ): Promise<Response> {
   let currentUrl = startUrl;
+  let headers = new Headers(init.headers);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const parsed = new URL(currentUrl);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       throw new SsrfBlockedError('Only http(s) URLs are supported');
     }
-    if (isBlockedHost(parsed.hostname)) {
+    if (!isPrivateHostAllowed() && isBlockedHost(parsed.hostname)) {
       throw new SsrfBlockedError('This URL is not allowed');
     }
-    const response = await fetch(currentUrl, { ...init, redirect: 'manual' });
+    const response = await fetch(currentUrl, { ...init, headers, redirect: 'manual' });
     if (response.status >= 300 && response.status < 400 && response.headers.has('location')) {
-      currentUrl = new URL(response.headers.get('location')!, currentUrl).toString();
+      const nextUrl = new URL(response.headers.get('location')!, currentUrl);
+      if (nextUrl.origin !== parsed.origin) {
+        // Custom catalog headers can contain secrets too. Never restore them
+        // if a later redirect returns to the original origin.
+        headers = new Headers({
+          'User-Agent': READEST_OPDS_USER_AGENT,
+          Accept: 'application/atom+xml, application/xml, text/xml, application/json, */*',
+        });
+      }
+      await response.body?.cancel();
+      currentUrl = nextUrl.toString();
       continue;
     }
     return response;
@@ -57,7 +109,7 @@ async function handleRequest(request: NextRequest, method: 'GET' | 'HEAD') {
   const url = decodeURIComponent(encodedUrl);
   const auth = request.nextUrl.searchParams.get('auth');
   const stream = request.nextUrl.searchParams.get('stream');
-  const customHeaders = deserializeOPDSCustomHeaders(request.nextUrl.searchParams.get('headers'));
+  const customHeaders = deserializeCustomHeaders(request.nextUrl.searchParams.get('headers'));
 
   if (!url) {
     return NextResponse.json(
@@ -79,7 +131,7 @@ async function handleRequest(request: NextRequest, method: 'GET' | 'HEAD') {
   if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
     return NextResponse.json({ error: 'Only http(s) URLs are supported' }, { status: 400 });
   }
-  if (isBlockedHost(parsedUrl.hostname)) {
+  if (!isPrivateHostAllowed() && isBlockedHost(parsedUrl.hostname)) {
     return NextResponse.json({ error: 'This URL is not allowed' }, { status: 400 });
   }
 
@@ -200,7 +252,12 @@ async function handleRequest(request: NextRequest, method: 'GET' | 'HEAD') {
       const isFileDownload =
         stream === 'true' ||
         (upstreamContentDisposition ?? '').toLowerCase().includes('attachment');
-      h.set('Cache-Control', isFileDownload ? 'no-store' : 'public, max-age=300');
+      h.set(
+        'Cache-Control',
+        isFileDownload || auth || Object.keys(customHeaders).length
+          ? 'no-store'
+          : 'public, max-age=300',
+      );
       h.set('Access-Control-Allow-Origin', '*');
       h.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
       h.set('Access-Control-Allow-Headers', 'Content-Type');
@@ -233,7 +290,10 @@ async function handleRequest(request: NextRequest, method: 'GET' | 'HEAD') {
       });
       return new NextResponse(response.body, { status: 200, headers });
     } else {
-      const buf = await response.arrayBuffer();
+      let buf = await response.arrayBuffer();
+      if (contentType.toLowerCase().includes('xml')) {
+        buf = sanitizeXmlBuffer(buf);
+      }
       const length = buf.byteLength;
       console.log(`[OPDS Proxy] Buffered Success: ${url} (${length} bytes)`);
       return new NextResponse(buf, {
@@ -273,12 +333,47 @@ async function handleRequest(request: NextRequest, method: 'GET' | 'HEAD') {
   }
 }
 
+// Every upstream response, including errors and streamed downloads, is
+// untrusted data. It must never set cookies, execute code, or install workers
+// with the application's origin privileges.
+function isolateProxyResponse(response: NextResponse): NextResponse {
+  const allowedHeaders = new Set([
+    'content-type',
+    'content-length',
+    'content-disposition',
+    'content-range',
+    'accept-ranges',
+    'etag',
+    'last-modified',
+    'cache-control',
+    'www-authenticate',
+    'x-content-length',
+    'access-control-allow-origin',
+    'access-control-allow-methods',
+    'access-control-allow-headers',
+    'access-control-expose-headers',
+  ]);
+  for (const key of [...response.headers.keys()]) {
+    if (!allowedHeaders.has(key)) response.headers.delete(key);
+  }
+  const mime = response.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() ?? '';
+  const safeMime =
+    /^(?:image\/(?:png|jpeg|gif|webp|avif|svg\+xml)|audio\/[a-z0-9.+-]+|video\/[a-z0-9.+-]+|text\/(?:plain|xml)|application\/(?:[a-z0-9.+-]+\+(?:xml|json)|xml|json|pdf|epub\+zip|zip|octet-stream))$/;
+  if (!safeMime.test(mime)) response.headers.set('Content-Type', 'application/octet-stream');
+  response.headers.set(
+    'Content-Security-Policy',
+    "sandbox; default-src 'none'; frame-ancestors 'none'",
+  );
+  response.headers.set('X-Content-Type-Options', 'nosniff');
+  return response;
+}
+
 export async function GET(request: NextRequest) {
-  return handleRequest(request, 'GET');
+  return isolateProxyResponse(await handleRequest(request, 'GET'));
 }
 
 export async function HEAD(request: NextRequest) {
-  return handleRequest(request, 'HEAD');
+  return isolateProxyResponse(await handleRequest(request, 'HEAD'));
 }
 
 export async function OPTIONS(_: NextRequest) {

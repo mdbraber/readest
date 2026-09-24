@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ProgressBar from '@/app/reader/components/ProgressBar';
@@ -7,6 +7,10 @@ import type { BookProgress, ViewSettings } from '@/types/book';
 import type { TOCItem } from '@/libs/document';
 
 const saveViewSettings = vi.fn();
+let medianPageDurationSecs: number | null = null;
+vi.mock('@/hooks/useMedianPageDurationSecs', () => ({
+  useMedianPageDurationSecs: () => medianPageDurationSecs,
+}));
 
 let currentViewSettings: ViewSettings;
 let currentProgress: BookProgress | null;
@@ -26,8 +30,9 @@ vi.mock('@/hooks/useTranslation', () => ({
       .replace('{{time}}', String(values?.['time'] ?? '{{time}}')),
 }));
 
+let currentAppService = { isMobile: false, hasSafeAreaInset: false };
 vi.mock('@/context/EnvContext', () => ({
-  useEnv: () => ({ envConfig: {}, appService: { isMobile: false, hasSafeAreaInset: false } }),
+  useEnv: () => ({ envConfig: {}, appService: currentAppService }),
 }));
 
 // Production code uses per-field selectors; mock must apply them so each
@@ -97,6 +102,8 @@ afterEach(() => {
 
 beforeEach(() => {
   saveViewSettings.mockClear();
+  medianPageDurationSecs = null;
+  currentAppService = { isMobile: false, hasSafeAreaInset: false };
   currentProgress = null;
   currentBookData = { isFixedLayout: false };
   currentRenderer = { page: 0, pages: 0 };
@@ -111,70 +118,12 @@ const makeProgress = (current: number, total: number): BookProgress =>
     timeinfo: { section: 0, total: 0 },
   }) as BookProgress;
 
-describe('ProgressBar — tap-to-toggle disabled reverts hidden footer', () => {
-  it("resets progressInfoMode to 'all' when the user disables tapToToggleFooter while mode was 'none'", () => {
-    // Simulate a user who tapped the footer to dismiss it (mode='none')
-    // while tapToToggleFooter was on. Now they have it switched off.
-    currentViewSettings = {
-      ...baseSettings,
-      tapToToggleFooter: false,
-      progressInfoMode: 'none',
-    } as ViewSettings;
-
-    renderProgressBar();
-
-    // The persisted progressInfoMode should be reset to the default
-    // ('all') so the footer reverts to its default visibility.
-    const persistCalls = saveViewSettings.mock.calls.filter(
-      (args) => args[2] === 'progressInfoMode',
-    );
-    expect(persistCalls.length).toBeGreaterThanOrEqual(1);
-    const lastCall = persistCalls[persistCalls.length - 1]!;
-    expect(lastCall[3]).toBe('all');
-  });
-
-  it("does not overwrite mode when tapToToggleFooter is on (user's cycled state stays)", () => {
-    currentViewSettings = {
-      ...baseSettings,
-      tapToToggleFooter: true,
-      progressInfoMode: 'none',
-    } as ViewSettings;
-
-    renderProgressBar();
-
-    // initial save mirrors the existing mode; importantly we never see
-    // a save with 'all' overriding the user's tap-cycled choice.
-    const persistCalls = saveViewSettings.mock.calls.filter(
-      (args) => args[2] === 'progressInfoMode',
-    );
-    expect(persistCalls.every((args) => args[3] === 'none')).toBe(true);
-  });
-
-  it("leaves mode untouched when tapToToggleFooter is off but mode is already 'all'", () => {
-    currentViewSettings = {
-      ...baseSettings,
-      tapToToggleFooter: false,
-      progressInfoMode: 'all',
-    } as ViewSettings;
-
-    renderProgressBar();
-
-    const persistCalls = saveViewSettings.mock.calls.filter(
-      (args) => args[2] === 'progressInfoMode',
-    );
-    // Either no save or a save matching the existing 'all' value — never
-    // a transition through some intermediate state.
-    expect(persistCalls.every((args) => args[3] === 'all')).toBe(true);
-  });
-});
-
 describe('ProgressBar — fixed-layout remaining pages', () => {
   it('says "in book" with section-derived count for fixed-layout books', () => {
     currentViewSettings = {
       ...baseSettings,
       showRemainingPages: true,
       showRemainingTime: false,
-      progressInfoMode: 'all',
     } as ViewSettings;
     currentProgress = makeProgress(2, 5);
     currentBookData = { isFixedLayout: true, bookDoc: { metadata: {} } };
@@ -191,7 +140,6 @@ describe('ProgressBar — fixed-layout remaining pages', () => {
       ...baseSettings,
       showRemainingPages: true,
       showRemainingTime: false,
-      progressInfoMode: 'all',
     } as ViewSettings;
     currentProgress = makeProgress(2, 5);
     currentBookData = { isFixedLayout: false };
@@ -214,7 +162,6 @@ describe('ProgressBar — decorative footer is not focusable', () => {
     // not be focusable so it can never receive a focus ring.
     currentViewSettings = {
       ...baseSettings,
-      progressInfoMode: 'all',
     } as ViewSettings;
     currentProgress = makeProgress(2, 5);
     currentBookData = { isFixedLayout: false };
@@ -226,6 +173,21 @@ describe('ProgressBar — decorative footer is not focusable', () => {
     expect(progressInfo).not.toBeNull();
     expect(progressInfo!.hasAttribute('tabindex')).toBe(false);
   });
+
+  it('stays above the reading ruler filter layer', () => {
+    currentViewSettings = {
+      ...baseSettings,
+    } as ViewSettings;
+    currentProgress = makeProgress(2, 5);
+    currentBookData = { isFixedLayout: false };
+    currentRenderer = { page: 1, pages: 4 };
+
+    const { container } = renderProgressBar();
+
+    // ReadingRuler uses z-[5]. Reader chrome must paint above it so the
+    // backdrop filter cannot blur the footer when the ruler reaches the bottom.
+    expect(container.querySelector('.progressinfo')?.classList.contains('z-10')).toBe(true);
+  });
 });
 
 describe('ProgressBar — sticky progress bar', () => {
@@ -235,7 +197,6 @@ describe('ProgressBar — sticky progress bar', () => {
     currentViewSettings = {
       ...baseSettings,
       showStickyProgressBar: true,
-      progressInfoMode: 'all',
       ...overrides,
     } as ViewSettings;
     // fraction (0.5) deliberately differs from the page fraction
@@ -287,20 +248,203 @@ describe('ProgressBar — sticky progress bar', () => {
   });
 });
 
+describe('ProgressBar — footer overlay pointer contract', () => {
+  // The full-width overlay container stays passive so taps and text selection
+  // over book content pass through; only the strip (band modes) or the pills
+  // themselves (scrolled mode) are tap targets — see the tap-to-toggle suite.
+  // In scrolled mode (no reserved band) each info segment carries its own
+  // shrink-wrapped pill backdrop so it stays legible floating over the text
+  // instead of a full-width bar.
+  const readerSettings = (overrides?: Partial<ViewSettings>) => {
+    currentViewSettings = {
+      ...baseSettings,
+      ...overrides,
+    } as ViewSettings;
+    currentProgress = makeProgress(2, 5);
+    currentBookData = { isFixedLayout: false };
+    currentRenderer = { page: 1, pages: 4 };
+  };
+
+  it('keeps the full-width container pointer-events-none even on mobile', () => {
+    readerSettings({ showRemainingPages: true });
+    currentAppService = { isMobile: true, hasSafeAreaInset: false };
+
+    const { container } = renderProgressBar();
+
+    const progressInfo = container.querySelector('.progressinfo') as HTMLElement;
+    expect(progressInfo.classList.contains('pointer-events-none')).toBe(true);
+    expect(progressInfo.classList.contains('pointer-events-auto')).toBe(false);
+  });
+
+  it('wraps each info segment in its own pill backdrop in scrolled mode', () => {
+    // Scrolled mode reserves no bottom band — the info floats over the book
+    // text, so each segment needs a shrink-wrapped backdrop to stay legible.
+    readerSettings({ scrolled: true, showRemainingPages: true });
+
+    const { container } = renderProgressBar();
+
+    const pills = container.querySelectorAll('.progress-pill');
+    expect(pills.length).toBeGreaterThanOrEqual(2); // remaining + progress
+    for (const pill of pills) {
+      expect((pill as HTMLElement).classList.contains('bg-base-100/85')).toBe(true);
+    }
+  });
+
+  it('does not add pill backdrops in paginated mode (band holds the info)', () => {
+    readerSettings({ scrolled: false, showRemainingPages: true });
+
+    const { container } = renderProgressBar();
+
+    expect(container.querySelector('.progress-pill')).toBeNull();
+  });
+});
+
+describe('ProgressBar — tap to toggle visibility (#5293)', () => {
+  // Tapping the footer toggles the info's visibility without touching layout
+  // or settings: the reserved band stays, showFooter never changes, and the
+  // state is ephemeral — a fresh mount (book open) starts visible again.
+  // Where the strip sits on reserved margin space (paginated band, sticky
+  // bar, vertical side column) the whole strip is the tap target; in scrolled
+  // mode the info floats over book text, so only the pills are tappable and
+  // the strip keeps letting taps and text selection through.
+  const readerSettings = (overrides?: Partial<ViewSettings>) => {
+    currentViewSettings = {
+      ...baseSettings,
+      ...overrides,
+    } as ViewSettings;
+    currentProgress = makeProgress(2, 5);
+    currentBookData = { isFixedLayout: false };
+    currentRenderer = { page: 1, pages: 4 };
+  };
+
+  it('toggles the info visibility when the strip is tapped in paginated mode', () => {
+    readerSettings({ showRemainingPages: true });
+
+    const { container } = renderProgressBar();
+
+    const strip = container.querySelector('.progress-strip') as HTMLElement;
+    expect(strip).not.toBeNull();
+    expect(strip.classList.contains('pointer-events-auto')).toBe(true);
+    expect(strip.classList.contains('opacity-0')).toBe(false);
+
+    fireEvent.click(strip);
+    expect(strip.classList.contains('opacity-0')).toBe(true);
+    // The strip stays tappable while hidden so the same tap brings it back.
+    expect(strip.classList.contains('pointer-events-auto')).toBe(true);
+
+    fireEvent.click(strip);
+    expect(strip.classList.contains('opacity-0')).toBe(false);
+  });
+
+  it('never writes settings from the tap (visibility is ephemeral)', () => {
+    readerSettings({ showRemainingPages: true });
+
+    const { container } = renderProgressBar();
+
+    fireEvent.click(container.querySelector('.progress-strip') as HTMLElement);
+    expect(saveViewSettings).not.toHaveBeenCalled();
+  });
+
+  it('starts visible again on a fresh mount (state resets with the book)', () => {
+    readerSettings({ showRemainingPages: true });
+
+    const first = renderProgressBar();
+    fireEvent.click(first.container.querySelector('.progress-strip') as HTMLElement);
+    expect(
+      (first.container.querySelector('.progress-strip') as HTMLElement).classList.contains(
+        'opacity-0',
+      ),
+    ).toBe(true);
+    first.unmount();
+
+    const second = renderProgressBar();
+    expect(
+      (second.container.querySelector('.progress-strip') as HTMLElement).classList.contains(
+        'opacity-0',
+      ),
+    ).toBe(false);
+  });
+
+  it('keeps the strip passive in scrolled mode — the pills are the tap targets', () => {
+    readerSettings({ scrolled: true, showRemainingPages: true });
+
+    const { container } = renderProgressBar();
+
+    const strip = container.querySelector('.progress-strip') as HTMLElement;
+    expect(strip.classList.contains('pointer-events-auto')).toBe(false);
+
+    const pill = container.querySelector('.progress-pill') as HTMLElement;
+    expect(pill.classList.contains('pointer-events-auto')).toBe(true);
+
+    fireEvent.click(pill);
+    expect(strip.classList.contains('opacity-0')).toBe(true);
+  });
+
+  it('makes the whole strip tappable in scrolled mode when the sticky bar reserves the band', () => {
+    readerSettings({ scrolled: true, showStickyProgressBar: true });
+
+    const { container } = renderProgressBar();
+
+    const strip = container.querySelector('.progress-strip') as HTMLElement;
+    expect(strip.classList.contains('pointer-events-auto')).toBe(true);
+  });
+
+  it('makes the side column tappable in vertical mode', () => {
+    readerSettings({ vertical: true, showRemainingPages: true });
+
+    const { container } = renderProgressBar();
+
+    const strip = container.querySelector('.progress-strip') as HTMLElement;
+    expect(strip.classList.contains('pointer-events-auto')).toBe(true);
+  });
+
+  it('exposes no tap target when the footer has nothing to show', () => {
+    readerSettings({
+      showProgressInfo: false,
+      showRemainingTime: false,
+      showRemainingPages: false,
+      showCurrentTime: false,
+      showCurrentBatteryStatus: false,
+      showStickyProgressBar: false,
+    });
+
+    const { container } = renderProgressBar();
+
+    expect(container.querySelector('.pointer-events-auto')).toBeNull();
+  });
+});
+
 describe('ProgressBar — contrast against the page (#4901)', () => {
-  // A light-mode PDF under a dark theme keeps its white page while the footer
-  // progress text stayed themed for the dark UI (neutral-content, light) and
-  // became unreadable over the white page. Blending the text spans against the
-  // real backdrop keeps the page number and remaining-pages text legible on
-  // any background. StatusInfo (clock/battery) is intentionally left alone — it
-  // manages its own blend against the battery glyph.
-  it('blends the progress and remaining text against the background in non-eink mode', () => {
+  // A light-mode PDF under a dark theme keeps its white page, so the footer
+  // progress/remaining text blends against the real backdrop (text-white/75 +
+  // mix-blend-difference) to stay legible over the white page. Reflowable books
+  // theme their own page to the UI, so the footer uses plain base-content text
+  // instead of the blend. StatusInfo (clock/battery) is intentionally left
+  // alone -- it manages its own blend against the battery glyph.
+  it('blends the progress and remaining text over a fixed-layout page in non-eink mode', () => {
     currentViewSettings = {
       ...baseSettings,
       isEink: false,
       showRemainingPages: true,
       showRemainingTime: false,
-      progressInfoMode: 'all',
+    } as ViewSettings;
+    currentProgress = makeProgress(2, 5);
+    currentBookData = { isFixedLayout: true };
+    currentRenderer = { page: 1, pages: 4 };
+
+    const { container } = renderProgressBar();
+
+    const info = container.querySelector('.progressinfo') as HTMLElement;
+    expect(info.classList.contains('mix-blend-difference')).toBe(true);
+    expect(info.classList.contains('text-white/75')).toBe(true);
+  });
+
+  it('uses themed base-content text for reflowable books in non-eink mode', () => {
+    currentViewSettings = {
+      ...baseSettings,
+      isEink: false,
+      showRemainingPages: true,
+      showRemainingTime: false,
     } as ViewSettings;
     currentProgress = makeProgress(2, 5);
     currentBookData = { isFixedLayout: false };
@@ -308,12 +452,9 @@ describe('ProgressBar — contrast against the page (#4901)', () => {
 
     const { container } = renderProgressBar();
 
-    const progress = container.querySelector('.progress-info') as HTMLElement;
-    const remaining = container.querySelector('.remaining-info') as HTMLElement;
-    expect(progress.classList.contains('mix-blend-difference')).toBe(true);
-    expect(progress.classList.contains('text-white/75')).toBe(true);
-    expect(remaining.classList.contains('mix-blend-difference')).toBe(true);
-    expect(remaining.classList.contains('text-white/75')).toBe(true);
+    const info = container.querySelector('.progressinfo') as HTMLElement;
+    expect(info.classList.contains('mix-blend-difference')).toBe(false);
+    expect(info.classList.contains('text-base-content')).toBe(true);
   });
 
   it('does not blend in eink mode', () => {
@@ -322,7 +463,6 @@ describe('ProgressBar — contrast against the page (#4901)', () => {
       isEink: true,
       showRemainingPages: true,
       showRemainingTime: false,
-      progressInfoMode: 'all',
     } as ViewSettings;
     currentProgress = makeProgress(2, 5);
     currentBookData = { isFixedLayout: false };
@@ -330,7 +470,176 @@ describe('ProgressBar — contrast against the page (#4901)', () => {
 
     const { container } = renderProgressBar();
 
-    const progress = container.querySelector('.progress-info') as HTMLElement;
-    expect(progress.classList.contains('mix-blend-difference')).toBe(false);
+    const info = container.querySelector('.progressinfo') as HTMLElement;
+    expect(info.classList.contains('mix-blend-difference')).toBe(false);
+  });
+
+  // #5342: scrolled mode gives every segment its own bg-base-100/85 pill, and
+  // the blend applies to the container as a group -- a white pill differenced
+  // against the white PDF page turns pure black. The pill already guarantees
+  // legibility, so the blend must stand down whenever pills are on.
+  it('drops the blend for a fixed-layout book when the pills provide the backdrop', () => {
+    currentViewSettings = {
+      ...baseSettings,
+      isEink: false,
+      scrolled: true,
+      showRemainingPages: true,
+      showRemainingTime: false,
+    } as ViewSettings;
+    currentProgress = makeProgress(2, 5);
+    currentBookData = { isFixedLayout: true };
+    currentRenderer = { page: 1, pages: 4 };
+
+    const { container } = renderProgressBar();
+
+    const info = container.querySelector('.progressinfo') as HTMLElement;
+    expect(container.querySelector('.progress-pill')).not.toBeNull();
+    expect(info.classList.contains('mix-blend-difference')).toBe(false);
+    expect(info.classList.contains('text-base-content')).toBe(true);
+  });
+
+  it('keeps the blend for a fixed-layout book in scrolled mode when the sticky bar replaces the pills', () => {
+    currentViewSettings = {
+      ...baseSettings,
+      isEink: false,
+      scrolled: true,
+      showStickyProgressBar: true,
+      showRemainingPages: true,
+      showRemainingTime: false,
+    } as ViewSettings;
+    currentProgress = makeProgress(2, 5);
+    currentBookData = { isFixedLayout: true };
+    currentRenderer = { page: 1, pages: 4 };
+
+    const { container } = renderProgressBar();
+
+    const info = container.querySelector('.progressinfo') as HTMLElement;
+    expect(container.querySelector('.progress-pill')).toBeNull();
+    expect(info.classList.contains('mix-blend-difference')).toBe(true);
+  });
+});
+
+describe('ProgressBar — TOC chapter remaining time (#6284)', () => {
+  const setup = (page: number, href: string) => {
+    currentViewSettings = { ...baseSettings, showRemainingTime: true, showRemainingPages: true };
+    currentProgress = {
+      ...makeProgress(page, 98),
+      sectionHref: href,
+      section: { current: 0, total: 1 },
+      pageinfo: { current: page, next: page + 2, total: 98 },
+    };
+    currentRenderer = { page: 13, pages: 43 };
+    currentSectionFractions = [0, 1];
+    medianPageDurationSecs = 60;
+    currentBookData = {
+      isFixedLayout: false,
+      bookDoc: {
+        toc: [0, 32, 64].map((start, i) => ({
+          id: i,
+          index: 0,
+          href: `body.xhtml#chapter${i + 1}`,
+          label: `Chapter ${i + 1}`,
+          location: { current: start, next: start, total: 98 },
+        })),
+      },
+    };
+  };
+
+  it('stops at the next TOC chapter inside the same spine file', () => {
+    setup(30, 'body.xhtml#chapter1');
+    const { container } = renderProgressBar();
+    expect(container.querySelector('.progressinfo')?.getAttribute('aria-label')).toContain(
+      '2 min left in chapter',
+    );
+    expect(container.querySelector('.progressinfo')?.getAttribute('aria-label')).toContain(
+      '1 pages left in chapter',
+    );
+  });
+
+  it('resets on a TOC boundary and returns to a small value when navigating back', () => {
+    setup(32, 'body.xhtml#chapter2');
+    const { container, rerender } = renderProgressBar();
+    expect(container.querySelector('.progressinfo')?.getAttribute('aria-label')).toContain(
+      '32 min left in chapter',
+    );
+    setup(30, 'body.xhtml#chapter1');
+    rerender(
+      <ProgressBar
+        bookKey='book-1'
+        horizontalGap={0}
+        contentInsets={{ top: 0, right: 0, bottom: 0, left: 0 }}
+        gridInsets={{ top: 0, right: 0, bottom: 0, left: 0 }}
+      />,
+    );
+    expect(container.querySelector('.progressinfo')?.getAttribute('aria-label')).toContain(
+      '2 min left in chapter',
+    );
+  });
+
+  it('does not inflate remaining screen pages when rounded location spans shrink', () => {
+    setup(1, 'body.xhtml#chapter1');
+    currentRenderer = { page: 1, pages: 65 };
+    currentProgress!.pageinfo.next = 3;
+    const { container, rerender } = renderProgressBar();
+    const props = {
+      bookKey: 'book-1',
+      horizontalGap: 0,
+      contentInsets: { top: 0, right: 0, bottom: 0, left: 0 },
+      gridInsets: { top: 0, right: 0, bottom: 0, left: 0 },
+    };
+    expect(container.querySelector('.progressinfo')?.getAttribute('aria-label')).toContain(
+      '21 pages left in chapter',
+    );
+    currentProgress!.pageinfo = { current: 3, next: 4, total: 98 };
+    currentRenderer.page = 2;
+    rerender(<ProgressBar {...props} />);
+    expect(container.querySelector('.progressinfo')?.getAttribute('aria-label')).toContain(
+      '20 pages left in chapter',
+    );
+    currentProgress!.pageinfo = { current: 30, next: 30, total: 98 };
+    rerender(<ProgressBar {...props} />);
+    expect(container.querySelector('.progressinfo')?.getAttribute('aria-label')).toContain(
+      '2 pages left in chapter',
+    );
+  });
+
+  it('counts to the book end for the last chapter', () => {
+    setup(96, 'body.xhtml#chapter3');
+    const { container } = renderProgressBar();
+    expect(container.querySelector('.progressinfo')?.getAttribute('aria-label')).toContain(
+      '2 min left in chapter',
+    );
+  });
+
+  it('uses nested TOC boundaries and ignores duplicate chapter starts', () => {
+    setup(30, 'body.xhtml#chapter1');
+    const toc = currentBookData!.bookDoc!.toc!;
+    currentBookData!.bookDoc!.toc = [
+      { ...toc[0]!, subitems: [{ ...toc[0]!, href: 'body.xhtml#part1' }, toc[1]!, toc[2]!] },
+    ];
+    const { container } = renderProgressBar();
+    expect(container.querySelector('.progressinfo')?.getAttribute('aria-label')).toContain(
+      '2 min left in chapter',
+    );
+  });
+
+  it('uses the spine time estimate until TOC locations are available', () => {
+    setup(30, 'body.xhtml#chapter1');
+    currentBookData!.bookDoc!.toc = [];
+    currentProgress!.timeinfo.section = 10;
+    medianPageDurationSecs = null;
+    const { container } = renderProgressBar();
+    expect(container.querySelector('.progressinfo')?.getAttribute('aria-label')).toContain(
+      '10 min left in chapter',
+    );
+  });
+
+  it('does not change the time when font size changes the number of screen pages', () => {
+    setup(30, 'body.xhtml#chapter1');
+    currentRenderer = { page: 26, pages: 86 };
+    const { container } = renderProgressBar();
+    expect(container.querySelector('.progressinfo')?.getAttribute('aria-label')).toContain(
+      '2 min left in chapter',
+    );
   });
 });

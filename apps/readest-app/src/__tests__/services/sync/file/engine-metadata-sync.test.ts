@@ -93,6 +93,7 @@ const makeStore = (overrides: Partial<LocalStore> = {}): LocalStore => ({
   addBookToLibrary: async () => {},
   updateBookMetadata: async () => {},
   deleteBookLocally: async () => {},
+  markBooksUploaded: async () => {},
   ...overrides,
 });
 
@@ -155,6 +156,31 @@ describe('FileSyncEngine metadata reconciliation (#4756)', () => {
     const indexedBook = capture.index!.books.find((b) => b.hash === 'h1')!;
     expect(indexedBook.groupId).toBe('g1');
     expect(indexedBook.groupName).toBe('Sci-Fi');
+  });
+
+  test('pulls newer remote reading progress onto the library row (#5067)', async () => {
+    // The peer read to 62% and pushed its row. Without this, the shelf keeps
+    // rendering 0% until the user opens the book (which copies the synced
+    // config.progress onto the row), even though the row itself re-sorts to
+    // the front because the merge applies the remote updatedAt.
+    const local = makeLocalBook({ updatedAt: 100 });
+    const remote = makeLocalBook({ progress: [62, 100], updatedAt: 200 });
+    const capture: { index?: RemoteLibraryIndex | null } = {};
+    const provider = makeProvider(makeRemoteIndex(remote, 200), null, capture);
+
+    const updateBookMetadata = vi.fn(async (_book: Book) => {});
+    const store = makeStore({ updateBookMetadata });
+
+    const engine = new FileSyncEngine(provider, store);
+    await engine.syncLibrary([local], {
+      strategy: 'silent',
+      syncBooks: false,
+      deviceId: 'pc-device',
+    });
+
+    expect(updateBookMetadata).toHaveBeenCalledTimes(1);
+    expect(updateBookMetadata.mock.calls[0]![0].progress).toEqual([62, 100]);
+    expect(capture.index!.books.find((b) => b.hash === 'h1')!.progress).toEqual([62, 100]);
   });
 
   test('pulls a peer readingStatus change even when local metadata is newer (#4634 semantics)', async () => {
@@ -267,7 +293,7 @@ describe('FileSyncEngine soft-delete propagation', () => {
     const provider = makeProvider(null, null, capture);
     // The GC sweep is separate, so the deleted book's hash dir + file still
     // exist remotely. Passing the deleted book in (it stays in allBooksMap)
-    // must keep the discovery pass from re-adding it as a download candidate.
+    // must keep the discovery pass from re-adding it as a cloud-shelf candidate.
     provider.list = vi.fn(async (path: string) => {
       if (path.endsWith('/books'))
         return [{ name: 'h1', path: '/Readest/books/h1', isDirectory: true }];
@@ -286,7 +312,7 @@ describe('FileSyncEngine soft-delete propagation', () => {
     });
 
     expect(addBookToLibrary).not.toHaveBeenCalled();
-    expect(result.booksDownloaded).toBe(0);
+    expect(result.booksAdded).toBe(0);
     expect(capture.index!.books.find((b) => b.hash === 'h1')!.deletedAt).toBe(500);
   });
 });

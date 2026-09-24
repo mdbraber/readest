@@ -131,20 +131,28 @@ export const applyTableTouchScroll = (document: Document) => {
 };
 
 /**
- * A display equation: a <math> that is the sole content of its container (or is
- * explicitly display="block"). Those need a scroll wrapper; an inline <math> sitting
- * among text in a paragraph must be left alone so it keeps flowing with the text.
+ * A display equation: a <math> that is explicitly display="block", or that is the
+ * sole content of its nearest block container, possibly through a chain of inline
+ * wrappers that are themselves sole children (<div><span><math/></span></div>).
+ * Those need a scroll wrapper. An inline <math> sitting among text must be left
+ * alone so it keeps flowing with the text, even when it is the only child of an
+ * inline <span> (how DITA/MathType exports mark every inline formula, #480): a
+ * block wrapper there breaks the line and indents the formula.
  */
-const isDisplayMath = (math: Element): boolean => {
+const isDisplayMath = (math: Element, win: Window | null): boolean => {
   if (math.getAttribute('display') === 'block') return true;
-  const parent = math.parentElement;
-  if (!parent) return false;
-  for (const node of parent.childNodes) {
-    if (node === math) continue;
-    if (node.nodeType === Node.ELEMENT_NODE) return false;
-    if (node.nodeType === Node.TEXT_NODE && node.textContent?.trim()) return false;
+  let el: Element = math;
+  for (;;) {
+    const parent = el.parentElement;
+    if (!parent) return false;
+    for (const node of parent.childNodes) {
+      if (node === el) continue;
+      if (node.nodeType === Node.ELEMENT_NODE) return false;
+      if (node.nodeType === Node.TEXT_NODE && node.textContent?.trim()) return false;
+    }
+    if (!win?.getComputedStyle(parent).display.startsWith('inline')) return true;
+    el = parent;
   }
-  return true;
 };
 
 /**
@@ -174,7 +182,7 @@ export const applyScrollableStyle = (document: Document) => {
   };
   document.querySelectorAll('table').forEach(wrap);
   document.querySelectorAll('math').forEach((math) => {
-    if (isDisplayMath(math)) wrap(math);
+    if (isDisplayMath(math, win)) wrap(math);
   });
 };
 
@@ -230,6 +238,35 @@ const decideTableFit = (wrapper: HTMLElement, win: (Window & typeof globalThis) 
     if (wrapper.clientWidth <= 0) return; // not laid out yet
     updateTableFit(wrapper);
     observer.disconnect();
+    remeasureAfterLateLayout(wrapper, win);
   });
   observer.observe(wrapper);
+};
+
+const FONT_POLL_MS = 100;
+const FONT_POLL_MAX_MS = 10_000;
+
+/**
+ * The first measurement can land before a swapped-in web font or a decoded
+ * image has widened the table (#6198): the cells measure in the fallback font,
+ * the wrapper is marked fit, and once the real font arrives the table runs past
+ * the column with overflow visible. Re-measure once the fonts settle and as each
+ * image in the table loads — a bounded handful of checks, not a persistent
+ * observer. `fonts.ready` is never touched: creating that promise crashes
+ * WebContent on iOS <= 16 (#5654), so poll `fonts.status` like foliate does.
+ */
+const remeasureAfterLateLayout = (wrapper: HTMLElement, win: Window & typeof globalThis) => {
+  const fonts = wrapper.ownerDocument.fonts;
+  if (fonts?.status === 'loading') {
+    const deadline = Date.now() + FONT_POLL_MAX_MS;
+    const timer = win.setInterval(() => {
+      if (fonts.status === 'loading' && Date.now() < deadline) return;
+      win.clearInterval(timer);
+      updateTableFit(wrapper);
+    }, FONT_POLL_MS);
+  }
+  for (const img of Array.from(wrapper.querySelectorAll('img'))) {
+    if (img.complete) continue;
+    img.addEventListener('load', () => updateTableFit(wrapper), { once: true });
+  }
 };

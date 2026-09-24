@@ -3,6 +3,7 @@ import {
   renderNoteTemplate,
   validateNoteTemplate,
   formatBlockQuote,
+  buildAnnotationCopyMarkdown,
   NoteTemplateData,
 } from '../../utils/note';
 
@@ -45,6 +46,31 @@ describe('renderNoteTemplate', () => {
       },
     ],
   };
+
+  describe('Cover image line (issue #5424)', () => {
+    // The exact snippet the default export template uses: `|300` is Obsidian's
+    // image-width syntax (mirroring Readwise's rw-book-cover templates); other
+    // renderers treat it as part of the alt text and ignore it. The line and
+    // its trailing blank line must appear only when a cover URL was resolved,
+    // without leaving a stray blank line before the title.
+    const template =
+      '{% if coverImageUrl %}![cover|300]({{ coverImageUrl }})\n\n{% endif %}## {{ title }}';
+
+    it('renders the cover image before the title when a URL is present', () => {
+      const result = renderNoteTemplate(template, {
+        ...sampleData,
+        coverImageUrl: 'https://assets.readest.com/media/book_covers/abcdef12/c0ffee.png',
+      });
+      expect(result).toBe(
+        '![cover|300](https://assets.readest.com/media/book_covers/abcdef12/c0ffee.png)\n\n## The Great Gatsby',
+      );
+    });
+
+    it('omits the cover line entirely when no URL is present', () => {
+      const result = renderNoteTemplate(template, sampleData);
+      expect(result).toBe('## The Great Gatsby');
+    });
+  });
 
   describe('Variable substitution', () => {
     it('should substitute simple variables', () => {
@@ -650,5 +676,77 @@ describe('formatBlockQuote', () => {
 
   it('should preserve empty lines within the quote', () => {
     expect(formatBlockQuote('First\n\nThird')).toBe('> First\n> \n> Third');
+  });
+});
+
+describe('buildAnnotationCopyMarkdown', () => {
+  const url = 'readest://book/abc/annotation/n1?cfi=/6/4';
+
+  it('should build a highlight (text only) with a link line', () => {
+    const result = buildAnnotationCopyMarkdown({
+      text: 'In my younger and more vulnerable years',
+      noteLabel: 'Note',
+      url,
+      linkLabel: 'Page: 12',
+    });
+    expect(result).toBe(
+      '> In my younger and more vulnerable years\n\n*[Page: 12](readest://book/abc/annotation/n1?cfi=/6/4)*',
+    );
+  });
+
+  it('should include the note block between the quote and the link', () => {
+    const result = buildAnnotationCopyMarkdown({
+      text: 'quote',
+      note: 'my thought',
+      noteLabel: 'Note',
+      url,
+      linkLabel: 'Page: 12',
+    });
+    expect(result).toBe(
+      '> quote\n\n**Note**: my thought\n\n*[Page: 12](readest://book/abc/annotation/n1?cfi=/6/4)*',
+    );
+  });
+
+  it('should blockquote every line of a multi-line highlight', () => {
+    const result = buildAnnotationCopyMarkdown({
+      text: 'line one\nline two',
+      noteLabel: 'Note',
+      url,
+      linkLabel: 'Open in Readest',
+    });
+    expect(result).toBe(
+      '> line one\n> line two\n\n*[Open in Readest](readest://book/abc/annotation/n1?cfi=/6/4)*',
+    );
+  });
+
+  it('should emit only the link line when there is no text or note', () => {
+    const result = buildAnnotationCopyMarkdown({
+      noteLabel: 'Note',
+      url,
+      linkLabel: 'Open in Readest',
+    });
+    expect(result).toBe('*[Open in Readest](readest://book/abc/annotation/n1?cfi=/6/4)*');
+  });
+
+  it('should translate the note label', () => {
+    const result = buildAnnotationCopyMarkdown({
+      text: 'quote',
+      note: 'ma pensee',
+      noteLabel: 'Note',
+      url,
+      linkLabel: 'Page: 3',
+    });
+    expect(result).toContain('**Note**: ma pensee');
+  });
+
+  it('should pass the web link form through unchanged', () => {
+    const webUrl = 'https://web.readest.com/o/book/abc/annotation/n1';
+    const result = buildAnnotationCopyMarkdown({
+      text: 'quote',
+      noteLabel: 'Note',
+      url: webUrl,
+      linkLabel: 'Page: 1',
+    });
+    expect(result).toBe(`> quote\n\n*[Page: 1](${webUrl})*`);
   });
 });

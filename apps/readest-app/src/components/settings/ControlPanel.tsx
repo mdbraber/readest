@@ -14,6 +14,7 @@ import { SettingsPanelPanelProp } from './SettingsDialog';
 import { annotationToolQuickActions } from '@/app/reader/components/annotator/AnnotationTools';
 import { applyPageTurnAttributes } from '@/app/reader/hooks/useCapturedTurn';
 import { isTauriAppPlatform } from '@/services/environment';
+import { DEFAULT_SYSTEM_SETTINGS } from '@/services/constants';
 import {
   BoxedList,
   NavigationRow,
@@ -27,11 +28,12 @@ import AnnotationToolbarCustomizer from './AnnotationToolbarCustomizer';
 import { DEFAULT_ANNOTATION_TOOLBAR_ITEMS } from '@/utils/annotationToolbar';
 import { canShareText } from '@/utils/share';
 import { optInTelemetry, optOutTelemetry } from '@/utils/telemetry';
+import KeyboardShortcutsSettings from './KeyboardShortcutsSettings';
 
 const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }) => {
   const _ = useTranslation();
   const { envConfig, appService } = useEnv();
-  const { getView, getViewSettings, recreateViewer } = useReaderStore();
+  const { getView, getViews, getViewSettings, recreateViewer } = useReaderStore();
   const { getBookData } = useBookDataStore();
   const { settings } = useSettingsStore();
   const { applyEinkMode } = useEinkMode();
@@ -47,6 +49,9 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
   );
   const [isDisableClick, setIsDisableClick] = useState(viewSettings.disableClick);
   const [isDisableSwipe, setIsDisableSwipe] = useState(viewSettings.disableSwipe);
+  const [disablePullDownToBookmark, setDisablePullDownToBookmark] = useState(
+    viewSettings.disablePullDownToBookmark ?? false,
+  );
   const [fullscreenClickArea, setFullscreenClickArea] = useState(viewSettings.fullscreenClickArea);
   const [swapClickArea, setSwapClickArea] = useState(viewSettings.swapClickArea);
   const [isDisableDoubleClick, setIsDisableDoubleClick] = useState(viewSettings.disableDoubleClick);
@@ -58,6 +63,7 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
   );
   const [copyToNotebook, setCopyToNotebook] = useState(viewSettings.copyToNotebook);
   const [showToolbarCustomizer, setShowToolbarCustomizer] = useState(false);
+  const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
   const [animated, setAnimated] = useState(viewSettings.animated);
   const [pageTurnStyle, setPageTurnStyle] = useState(viewSettings.pageTurnStyle || 'push');
   const [isEink, setIsEink] = useState(viewSettings.isEink);
@@ -67,6 +73,8 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     settings.swipeBrightnessGesture,
   );
   const [screenWakeLock, setScreenWakeLock] = useState(settings.screenWakeLock);
+  const [autohideCursor, setAutohideCursor] = useState(settings.autohideCursor);
+  const [gamepadEnabled, setGamepadEnabled] = useState(settings.gamepadEnabled);
   const [allowScript, setAllowScript] = useState(viewSettings.allowScript);
   const [isAutoCheckUpdates, setIsAutoCheckUpdates] = useState(settings.autoCheckUpdates);
   const [isNightlyChannel, setIsNightlyChannel] = useState(settings.updateChannel === 'nightly');
@@ -98,6 +106,7 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
       showPaginationButtons: setShowPaginationButtons,
       disableClick: setIsDisableClick,
       disableSwipe: setIsDisableSwipe,
+      disablePullDownToBookmark: setDisablePullDownToBookmark,
       swapClickArea: setSwapClickArea,
       animated: setAnimated,
       isEink: setIsEink,
@@ -115,7 +124,16 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
       false,
       true,
     );
+    if (appService?.hasUpdater) {
+      const { autoCheckUpdates = true, updateChannel = 'stable' } = DEFAULT_SYSTEM_SETTINGS;
+      saveSysSettings(envConfig, 'autoCheckUpdates', autoCheckUpdates);
+      saveSysSettings(envConfig, 'updateChannel', updateChannel);
+      setIsAutoCheckUpdates(autoCheckUpdates);
+      setIsNightlyChannel(updateChannel === 'nightly');
+    }
     pageTurnerResetRef.current();
+    // Keyboard/mouse bindings are NOT reset here — they are device-local and
+    // have their own "Reset all" inside the Keyboard Shortcuts sub-page.
   };
 
   useEffect(() => {
@@ -132,6 +150,12 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
       `${getMaxInlineSize(viewSettings)}px`,
     );
     getView(bookKey)?.renderer.setStyles?.(getStyles(viewSettings!));
+    // `scrolled` decides which engine owns a swipe, so it has to push the turn
+    // attributes through like every other input to that decision. Left stale,
+    // the paginator keeps `turn-style`/no `no-swipe` from scroll flow and
+    // animates the swipe itself while the interceptor — which recomputes
+    // eligibility live — runs a captured turn over the top: three pages slide.
+    applyTurnAttributes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isScrolledMode]);
 
@@ -190,6 +214,18 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     applyTurnAttributes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDisableSwipe]);
+
+  useEffect(() => {
+    saveViewSettings(
+      envConfig,
+      bookKey,
+      'disablePullDownToBookmark',
+      disablePullDownToBookmark,
+      false,
+      false,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [disablePullDownToBookmark]);
 
   useEffect(() => {
     saveViewSettings(envConfig, bookKey, 'disableDoubleClick', isDisableDoubleClick, false, false);
@@ -257,6 +293,19 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     saveSysSettings(envConfig, 'screenWakeLock', screenWakeLock);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenWakeLock]);
+
+  useEffect(() => {
+    if (autohideCursor === settings.autohideCursor) return;
+    saveSysSettings(envConfig, 'autohideCursor', autohideCursor);
+    getViews().forEach((view) => view?.toggleAttribute('autohide-cursor', autohideCursor));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autohideCursor]);
+
+  useEffect(() => {
+    if (gamepadEnabled === settings.gamepadEnabled) return;
+    saveSysSettings(envConfig, 'gamepadEnabled', gamepadEnabled);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gamepadEnabled]);
 
   useEffect(() => {
     if (viewSettings.allowScript === allowScript) return;
@@ -336,13 +385,16 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     );
   }
 
+  if (showKeyboardShortcuts) {
+    return <KeyboardShortcutsSettings onBack={() => setShowKeyboardShortcuts(false)} />;
+  }
+
   return (
     <div className='my-4 w-full space-y-6'>
       <BoxedList title={_('Scroll')} data-setting-id='settings.control.scrolledMode'>
         <SettingsSwitchRow
           label={_('Scrolled Mode')}
           checked={isScrolledMode}
-          disabled={bookData?.isFixedLayout}
           onChange={() => setScrolledMode(!isScrolledMode)}
         />
         <SettingsSwitchRow
@@ -418,10 +470,24 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
         }}
       />
 
+      <BoxedList title={_('Shortcuts')} data-setting-id='settings.control.keyboardShortcuts'>
+        <NavigationRow
+          title={_('Keyboard Shortcuts')}
+          status={_('Customize keyboard and mouse controls')}
+          onClick={() => setShowKeyboardShortcuts(true)}
+        />
+      </BoxedList>
+
       <BoxedList
         title={_('Annotation Tools')}
         data-setting-id='settings.control.enableQuickActions'
       >
+        <SettingsSwitchRow
+          label={_('Pull-Down to Bookmark')}
+          checked={!disablePullDownToBookmark}
+          onChange={() => setDisablePullDownToBookmark(!disablePullDownToBookmark)}
+          data-setting-id='settings.control.disablePullDownToBookmark'
+        />
         <SettingsSwitchRow
           label={_('Enable Quick Actions')}
           checked={enableAnnotationQuickActions}
@@ -471,23 +537,19 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
       </BoxedList>
 
       <BoxedList title={_('Device')} data-setting-id='settings.control.device'>
-        {(appService?.isAndroidApp || appService?.appPlatform === 'web') && (
-          <SettingsSwitchRow
-            label={_('E-Ink Mode')}
-            checked={isEink}
-            onChange={() => setIsEink(!isEink)}
-            data-setting-id='settings.control.einkMode'
-          />
-        )}
-        {(appService?.isAndroidApp || appService?.appPlatform === 'web') && (
-          <SettingsSwitchRow
-            label={_('Color E-Ink Mode')}
-            checked={isColorEink}
-            disabled={!isEink}
-            onChange={() => setIsColorEink(!isColorEink)}
-            data-setting-id='settings.control.colorEinkMode'
-          />
-        )}
+        <SettingsSwitchRow
+          label={_('E-Ink Mode')}
+          checked={isEink}
+          onChange={() => setIsEink(!isEink)}
+          data-setting-id='settings.control.einkMode'
+        />
+        <SettingsSwitchRow
+          label={_('Color E-Ink Mode')}
+          checked={isColorEink}
+          disabled={!isEink}
+          onChange={() => setIsColorEink(!isColorEink)}
+          data-setting-id='settings.control.colorEinkMode'
+        />
         {appService?.isMobileApp && (
           <SettingsSwitchRow
             label={_('System Screen Brightness')}
@@ -506,9 +568,26 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
         )}
         <SettingsSwitchRow
           label={_('Keep Screen Awake')}
+          description={_('Only while reading')}
           checked={screenWakeLock}
           onChange={() => setScreenWakeLock(!screenWakeLock)}
           data-setting-id='settings.control.screenWakeLock'
+        />
+        {!appService?.isMobile && (
+          <SettingsSwitchRow
+            label={_('Auto-hide Cursor')}
+            description={_('After a moment of inactivity')}
+            checked={autohideCursor}
+            onChange={() => setAutohideCursor(!autohideCursor)}
+            data-setting-id='settings.control.autohideCursor'
+          />
+        )}
+        <SettingsSwitchRow
+          label={_('Gamepad Support')}
+          description={_('Navigate with a connected controller')}
+          checked={gamepadEnabled}
+          onChange={() => setGamepadEnabled(!gamepadEnabled)}
+          data-setting-id='settings.control.gamepadEnabled'
         />
       </BoxedList>
 

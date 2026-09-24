@@ -44,6 +44,13 @@ const makeSettings = (overrides: Partial<SystemSettings> = {}): SystemSettings =
     kosync: { serverUrl: '', username: '', userkey: '', password: '' },
     readwise: { accessToken: '' },
     hardcover: { accessToken: '' },
+    notion: {
+      enabled: false,
+      accessToken: '',
+      databaseId: '',
+      lastSyncedAt: 0,
+      includeChapterHeading: true,
+    },
     webdav: { serverUrl: '', username: '', password: '', rootPath: '/' },
     ...overrides,
   }) as unknown as SystemSettings;
@@ -60,6 +67,22 @@ const enableCredentialsSync = (): void => {
   const current = useSettingsStore.getState().settings;
   useSettingsStore.setState({
     settings: { ...current, syncCategories: { credentials: true } } as never,
+  } as never);
+};
+
+/**
+ * Flip the 'dictionary' sync category for the current test. Dictionary
+ * preferences (providerOrder / providerEnabled / webSearches / fontScale)
+ * ride the bundled settings row but belong to the user-facing
+ * "Dictionaries" toggle, not "App settings" — see issue #5465.
+ */
+const setDictionarySync = (enabled: boolean): void => {
+  const current = useSettingsStore.getState().settings;
+  useSettingsStore.setState({
+    settings: {
+      ...current,
+      syncCategories: { ...current?.syncCategories, dictionary: enabled },
+    } as never,
   } as never);
 };
 
@@ -217,6 +240,47 @@ describe('publishSettingsIfChanged', () => {
     expect(patch.dictionarySettings?.providerEnabled).toEqual({ a: true, b: true });
   });
 
+  test('does NOT publish dictionarySettings when the dictionary category is OFF (issue #5465)', async () => {
+    setDictionarySync(false);
+    await publishSettingsIfChanged(
+      makeSettings({
+        dictionarySettings: {
+          providerOrder: ['imp-new'],
+          providerEnabled: { 'imp-new': true, 'builtin:systemDictionary': false },
+          webSearches: [{ id: 'web:y', name: 'Y', urlTemplate: 'https://y/?q=%WORD%' }],
+          fontScale: 1.2,
+        },
+      } as Partial<SystemSettings>),
+    );
+    expect(publishMock).toHaveBeenCalledTimes(1);
+    const patch = publishMock.mock.calls[0]![1].patch as Partial<SystemSettings>;
+    expect(patch.dictionarySettings).toBeUndefined();
+    // Unrelated whitelisted settings ride the same row and still publish.
+    expect(patch.globalReadSettings?.customHighlightColors).toEqual(
+      baseHighlight.customHighlightColors,
+    );
+  });
+
+  test('markExplicitProviderOrderPublish does not override the OFF gate', async () => {
+    const { markExplicitProviderOrderPublish } = await import(
+      '@/services/sync/replicaSettingsSync'
+    );
+    setDictionarySync(false);
+    markExplicitProviderOrderPublish();
+    await publishSettingsIfChanged(
+      makeSettings({
+        dictionarySettings: {
+          providerOrder: ['imp-new', 'builtin:wiktionary'],
+          providerEnabled: { 'imp-new': true },
+          webSearches: [],
+        },
+      } as Partial<SystemSettings>),
+    );
+    expect(publishMock).toHaveBeenCalledTimes(1);
+    const patch = publishMock.mock.calls[0]![1].patch as Partial<SystemSettings>;
+    expect(patch.dictionarySettings).toBeUndefined();
+  });
+
   test('triggers the passphrase gate when an encrypted field gets meaningful content while locked', async () => {
     enableCredentialsSync();
     isUnlocked = false;
@@ -286,6 +350,13 @@ describe('publishSettingsIfChanged', () => {
             enabled: true,
             lastSyncedAt: 0,
           } as SystemSettings['hardcover'],
+          notion: {
+            enabled: true,
+            accessToken: 'notion-token',
+            databaseId: 'notion-database-id',
+            lastSyncedAt: 0,
+            includeChapterHeading: false,
+          },
         }),
       );
       // Plaintext kosync.serverUrl still publishes — only the credential
@@ -298,6 +369,8 @@ describe('publishSettingsIfChanged', () => {
       expect(patch.kosync?.password).toBeUndefined();
       expect(patch.readwise?.accessToken).toBeUndefined();
       expect(patch.hardcover?.accessToken).toBeUndefined();
+      expect(patch.notion?.databaseId).toBe('notion-database-id');
+      expect(patch.notion?.accessToken).toBeUndefined();
     });
 
     test('publishes credential paths normally when credentials sync is ON', async () => {
@@ -311,11 +384,20 @@ describe('publishSettingsIfChanged', () => {
             userkey: '',
             password: 'hunter2',
           } as SystemSettings['kosync'],
+          notion: {
+            enabled: true,
+            accessToken: 'notion-token',
+            databaseId: 'notion-database-id',
+            lastSyncedAt: 0,
+            includeChapterHeading: false,
+          },
         }),
       );
       expect(publishMock).toHaveBeenCalledTimes(1);
       const patch = publishMock.mock.calls[0]![1].patch as Partial<SystemSettings>;
       expect(patch.kosync?.password).toBe('hunter2');
+      expect(patch.notion?.databaseId).toBe('notion-database-id');
+      expect(patch.notion?.accessToken).toBe('notion-token');
     });
 
     test('omits WebDAV credentials but keeps serverUrl/rootPath when credentials sync is OFF (issue #4810)', async () => {
@@ -362,6 +444,52 @@ describe('publishSettingsIfChanged', () => {
       expect(patch.webdav?.rootPath).toBe('/Books');
     });
 
+    test('omits S3 credentials but keeps endpoint/region/bucket when credentials sync is OFF', async () => {
+      await setCredentials(undefined); // default OFF
+      isUnlocked = false;
+      await publishSettingsIfChanged(
+        makeSettings({
+          s3: {
+            endpoint: 'https://acc.r2.cloudflarestorage.com',
+            region: 'auto',
+            bucket: 'readest',
+            accessKeyId: 'AKIA',
+            secretAccessKey: 'shh',
+          } as SystemSettings['s3'],
+        }),
+      );
+      expect(publishMock).toHaveBeenCalledTimes(1);
+      const patch = publishMock.mock.calls[0]![1].patch as Partial<SystemSettings>;
+      // Plaintext connection metadata still ships.
+      expect(patch.s3?.endpoint).toBe('https://acc.r2.cloudflarestorage.com');
+      expect(patch.s3?.region).toBe('auto');
+      expect(patch.s3?.bucket).toBe('readest');
+      // Access keys are gated off.
+      expect(patch.s3?.accessKeyId).toBeUndefined();
+      expect(patch.s3?.secretAccessKey).toBeUndefined();
+    });
+
+    test('publishes S3 credentials when credentials sync is ON', async () => {
+      await setCredentials(true);
+      isUnlocked = true;
+      await publishSettingsIfChanged(
+        makeSettings({
+          s3: {
+            endpoint: 'https://acc.r2.cloudflarestorage.com',
+            region: 'auto',
+            bucket: 'readest',
+            accessKeyId: 'AKIA',
+            secretAccessKey: 'shh',
+          } as SystemSettings['s3'],
+        }),
+      );
+      expect(publishMock).toHaveBeenCalledTimes(1);
+      const patch = publishMock.mock.calls[0]![1].patch as Partial<SystemSettings>;
+      expect(patch.s3?.endpoint).toBe('https://acc.r2.cloudflarestorage.com');
+      expect(patch.s3?.accessKeyId).toBe('AKIA');
+      expect(patch.s3?.secretAccessKey).toBe('shh');
+    });
+
     test('skipping all of the only-credential changes is a clean no-op (no empty publish)', async () => {
       await setCredentials(undefined);
       isUnlocked = false;
@@ -397,37 +525,40 @@ describe('publishSettingsIfChanged', () => {
     expect(patch.kosync?.password).toBeUndefined();
     expect(patch.readwise?.accessToken).toBeUndefined();
     expect(patch.hardcover?.accessToken).toBeUndefined();
+    expect(patch.notion?.accessToken).toBeUndefined();
   });
 
-  test('initSettingsSync(initialSettings) primes the snapshot so the first setSettings(disk_default) does not push', async () => {
+  test('initSettingsSync(initialSettings) primes the snapshot so structural disk defaults do not re-push', async () => {
     // Real-world bug: a fresh-install Device B's library boot calls
     // setSettings(disk_default) which fires publishSettingsIfChanged
-    // with an empty lastPublishedFields snapshot. Every whitelisted
-    // field looks "changed from undefined" and gets pushed to the
-    // server with a fresh HLC, overwriting the cross-device
+    // with an empty lastPublishedFields snapshot. Every structural
+    // whitelisted field looks "changed from undefined" and gets pushed
+    // to the server with a fresh HLC, overwriting the cross-device
     // authoritative values another device set. Disk-priming via
     // initSettingsSync(initialSettings) seeds the snapshot from the
-    // just-loaded disk so the same-value first publish is a no-op.
+    // just-loaded disk so the same-value first publish skips them.
+    //
+    // Credential connection metadata (webdav.rootPath, kosync.serverUrl, ...)
+    // is push-hash tracked, NOT disk-seeded, so it is intentionally exempt
+    // from this priming — that exemption is what lets a configured-but-never-
+    // published URL reach the other devices (#5141).
     const diskSettings = makeSettings({
       dictionarySettings: {
         providerOrder: ['builtin:wiktionary', 'builtin:wikipedia'],
         providerEnabled: { 'builtin:wiktionary': true, 'builtin:wikipedia': true },
         webSearches: [],
       },
-      kosync: {
-        serverUrl: 'https://sync.koreader.rocks/',
-        username: '',
-        userkey: '',
-        password: '',
-      } as SystemSettings['kosync'],
     } as Partial<SystemSettings>);
     initSettingsSync(diskSettings);
 
-    // The same disk_default replayed (typical library page initLibrary
-    // flow) — should produce no publish because every whitelisted
-    // field already matches the primed snapshot.
+    // The same disk_default replayed (typical library page initLibrary flow).
     await publishSettingsIfChanged(diskSettings);
-    expect(publishMock).not.toHaveBeenCalled();
+
+    // Structural fields primed from disk stay out of the diff — only the
+    // hash-tracked connection metadata (if any) may publish.
+    const patch = publishMock.mock.calls[0]?.[1].patch as Partial<SystemSettings> | undefined;
+    expect(patch?.dictionarySettings?.providerEnabled).toBeUndefined();
+    expect(patch?.globalReadSettings).toBeUndefined();
   });
 
   test('initSettingsSync priming does not block legitimate user changes against the seeded baseline', async () => {
@@ -455,6 +586,34 @@ describe('publishSettingsIfChanged', () => {
     expect(publishMock).toHaveBeenCalledTimes(1);
     const patch = publishMock.mock.calls[0]![1].patch as Partial<SystemSettings>;
     expect(patch.kosync?.serverUrl).toBe('https://kosync.example');
+  });
+
+  test('re-publishes a disk-configured connection URL that was never synced, so it rejoins its credentials (issue #5141)', async () => {
+    enableCredentialsSync();
+    isUnlocked = true;
+    // A device that configured WebDAV before serverUrl entered the sync
+    // whitelist (#4810): the URL + credentials are on disk at boot, but were
+    // never actually published to the server.
+    const disk = makeSettings({
+      webdav: {
+        serverUrl: 'https://dav.example.com',
+        username: 'alice',
+        password: 'hunter2',
+        rootPath: '/Books',
+      } as SystemSettings['webdav'],
+    });
+    initSettingsSync(disk);
+
+    // Any settings save re-runs the publisher. The credentials (no stored
+    // push-hash) publish; the server URL and root path MUST ride along
+    // rather than stay stranded on this device.
+    await publishSettingsIfChanged(disk);
+    expect(publishMock).toHaveBeenCalledTimes(1);
+    const patch = publishMock.mock.calls[0]![1].patch as Partial<SystemSettings>;
+    expect(patch.webdav?.username).toBe('alice');
+    expect(patch.webdav?.password).toBe('hunter2');
+    expect(patch.webdav?.serverUrl).toBe('https://dav.example.com');
+    expect(patch.webdav?.rootPath).toBe('/Books');
   });
 
   test('does NOT trigger the gate when only plaintext settings change', async () => {
@@ -614,6 +773,84 @@ describe('applyRemoteSettings', () => {
     expect(merged.syncBooks).toBe(true);
   });
 
+  test('deep-merges Notion credentials without clobbering local sync state', () => {
+    const env = makeEnvConfig();
+    useSettingsStore.setState({
+      ...useSettingsStore.getState(),
+      settings: makeSettings({
+        notion: {
+          enabled: true,
+          accessToken: 'old-token',
+          databaseId: 'old-database',
+          lastSyncedAt: 999,
+          includeChapterHeading: false,
+        },
+      }),
+    });
+
+    applyRemoteSettings(env, {
+      name: 'singleton',
+      patch: {
+        notion: {
+          accessToken: 'new-token',
+          databaseId: 'new-database',
+        },
+      } as unknown as Partial<SystemSettings>,
+    });
+
+    const merged = useSettingsStore.getState().settings.notion;
+    expect(merged.accessToken).toBe('new-token');
+    expect(merged.databaseId).toBe('new-database');
+    expect(merged.enabled).toBe(true);
+    expect(merged.lastSyncedAt).toBe(999);
+    expect(merged.includeChapterHeading).toBe(false);
+  });
+
+  test('deep-merges S3 credentials without clobbering local per-device fields', () => {
+    const env = makeEnvConfig();
+    useSettingsStore.setState({
+      ...useSettingsStore.getState(),
+      settings: makeSettings({
+        s3: {
+          enabled: true,
+          endpoint: 'https://old.r2.cloudflarestorage.com',
+          region: 'auto',
+          bucket: 'old-bucket',
+          accessKeyId: 'OLD',
+          secretAccessKey: 'old-secret',
+          deviceId: 'this-device',
+          lastSyncedAt: 999,
+          providerSelectedAt: 111,
+          syncBooks: true,
+        } as unknown as SystemSettings['s3'],
+      }),
+    });
+    applyRemoteSettings(env, {
+      name: 'singleton',
+      patch: {
+        s3: {
+          endpoint: 'https://acc.r2.cloudflarestorage.com',
+          region: 'auto',
+          bucket: 'readest',
+          accessKeyId: 'AKIA',
+          secretAccessKey: 'shh',
+        },
+      } as unknown as Partial<SystemSettings>,
+    });
+    const merged = useSettingsStore.getState().settings.s3;
+    // Synced connection fields are applied.
+    expect(merged.endpoint).toBe('https://acc.r2.cloudflarestorage.com');
+    expect(merged.bucket).toBe('readest');
+    expect(merged.accessKeyId).toBe('AKIA');
+    expect(merged.secretAccessKey).toBe('shh');
+    // Per-device fields the remote patch omits must survive the merge.
+    expect(merged.enabled).toBe(true);
+    expect(merged.deviceId).toBe('this-device');
+    expect(merged.lastSyncedAt).toBe(999);
+    expect(merged.providerSelectedAt).toBe(111);
+    expect(merged.syncBooks).toBe(true);
+  });
+
   test('empty patch is a no-op', () => {
     const env = makeEnvConfig();
     const before = useSettingsStore.getState().settings;
@@ -651,6 +888,75 @@ describe('applyRemoteSettings', () => {
       { id: 'web:remote-y', name: 'Y', urlTemplate: 'https://y/?q=%WORD%' },
     ]);
     expect(dictMirror.defaultProviderId).toBe('local-x');
+  });
+
+  test('does NOT apply remote dictionarySettings when the dictionary category is OFF (issue #5465)', async () => {
+    const { useCustomDictionaryStore } = await import('@/store/customDictionaryStore');
+    const localDict = {
+      providerOrder: ['local-x'],
+      providerEnabled: { 'local-x': true },
+      defaultProviderId: 'local-x',
+      webSearches: [],
+    };
+    useSettingsStore.setState({
+      ...useSettingsStore.getState(),
+      settings: makeSettings({ dictionarySettings: localDict } as Partial<SystemSettings>),
+    });
+    setDictionarySync(false);
+    useCustomDictionaryStore.setState({
+      ...useCustomDictionaryStore.getState(),
+      settings: { ...localDict },
+    });
+
+    applyRemoteSettings(makeEnvConfig(), {
+      name: 'singleton',
+      patch: {
+        dictionarySettings: {
+          providerOrder: ['remote-y'],
+          providerEnabled: { 'remote-y': true },
+          webSearches: [{ id: 'web:remote-y', name: 'Y', urlTemplate: 'https://y/?q=%WORD%' }],
+        },
+        globalReadSettings: { userHighlightColors: [{ name: 'mint', color: '#a8e6cf' }] },
+      } as unknown as Partial<SystemSettings>,
+    });
+
+    const merged = useSettingsStore.getState().settings;
+    expect(merged.dictionarySettings.providerOrder).toEqual(['local-x']);
+    expect(merged.dictionarySettings.providerEnabled).toEqual({ 'local-x': true });
+    expect(merged.dictionarySettings.webSearches).toEqual([]);
+    // Non-dictionary fields on the same row still apply.
+    expect(merged.globalReadSettings.userHighlightColors).toEqual([
+      { name: 'mint', color: '#a8e6cf' },
+    ]);
+    // The dictionary panel / reader popup mirror stays on the local values.
+    expect(useCustomDictionaryStore.getState().settings.providerOrder).toEqual(['local-x']);
+  });
+
+  test('a dictionary-only remote patch is a no-op when the category is OFF', () => {
+    useSettingsStore.setState({
+      ...useSettingsStore.getState(),
+      settings: makeSettings({
+        dictionarySettings: {
+          providerOrder: ['local-x'],
+          providerEnabled: { 'local-x': true },
+          webSearches: [],
+        },
+      } as Partial<SystemSettings>),
+    });
+    setDictionarySync(false);
+    const before = useSettingsStore.getState().settings;
+    applyRemoteSettings(makeEnvConfig(), {
+      name: 'singleton',
+      patch: {
+        dictionarySettings: {
+          providerOrder: ['remote-y'],
+          providerEnabled: { 'remote-y': true },
+          webSearches: [],
+        },
+      } as unknown as Partial<SystemSettings>,
+    });
+    expect(useSettingsStore.getState().settings).toBe(before);
+    expect(useSettingsStore.getState().saveSettings).not.toHaveBeenCalled();
   });
 
   test('deep-merges dictionarySettings without clobbering local fields', () => {

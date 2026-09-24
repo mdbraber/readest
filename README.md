@@ -79,22 +79,25 @@ Several changes in this fork were directly ported from or inspired by the work o
 
 | **Feature**                                | **Description**                                                                                                        | **Status** |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ---------- |
-| **Multi-Format Support**                   | Support EPUB, MOBI, KF8 (AZW3), FB2, CBZ, TXT, PDF                                                                     | ✅         |
+| **Multi-Format Support**                   | Support EPUB, PDF, MOBI, KF8 (AZW3), FB2, CBZ, TXT, MD (Markdown)                                                                      | ✅         |
 | **Scroll/Page View Modes**                 | Switch between scrolling or paginated reading modes.                                                                   | ✅         |
-| **Full-Text Search**                       | Search across the entire book to find relevant sections.                                                               | ✅         |
+| **Full-Text Search**                       | Search inside a book or across the current library shelf to find relevant sections.                                    | ✅         |
 | **Annotations and Highlighting**           | Add highlights, bookmarks, and notes to enhance your reading experience and use instant mode for quicker interactions. | ✅         |
-| **Dictionary/Wikipedia Lookup**            | Instantly look up words and terms when reading.                                                                        | ✅         |
+| **Dictionary/Wikipedia Lookup**            | Look up words with built-in sources or import local packs, including Yomitan ZIP/RDICT, from Settings → Custom Dictionaries. | ✅         |
 | **[Parallel Read][link-parallel-read]**    | Read two books or documents simultaneously in a split-screen view.                                                     | ✅         |
 | **Customize Font and Layout**              | Adjust font, layout, theme mode, and theme colors for a personalized experience.                                       | ✅         |
 | **Code Syntax Highlighting**               | Read software manuals with rich coloring of code examples.                                                             | ✅         |
 | **File Association and Open With**         | Quickly open files in Readest in your file browser with one-click.                                                     | ✅         |
 | **Library Management**                     | Organize, sort, and manage your entire ebook library.                                                                  | ✅         |
 | **OPDS/Calibre Integration**               | Integrate OPDS/Calibre to access online libraries and catalogs.                                                        | ✅         |
+| **Web Page Clipping**                      | Open websites, sign in, and clip pages with **From Web Browser**. **From Web Novel** can reuse your browser session to import selected chapters and their images. | ✅         |
 | **Translate with DeepL and Yandex**        | From a single sentence to the entire book—translate instantly.                                                         | ✅         |
+| **Audiobook Support**                      | Extend functionality to play and manage audiobooks.                                                        | ✅           |
 | **Text-to-Speech (TTS) Support**           | Enjoy smooth, multilingual narration—even within a single book.                                                        | ✅         |
+| [**Read-Along Narration**][link-readalong] | Play embedded EPUB 3 Media Overlays with timed highlighting, or pair a reflowable EPUB locally with DRM-free MP3, M4A, or M4B narration. [Storyteller][link-storyteller] remains an option for generating phrase-aligned EPUBs. | ✅         |
 | **Sync across Platforms**                  | Synchronize book files, reading progress, notes, and bookmarks across all supported platforms.                         | ✅         |
 | [**Sync with Koreader**][link-kosync-wiki] | Synchronize reading progress, notes, and bookmarks with [Koreader][link-koreader] devices.                             | ✅         |
-| **Accessibility**                          | Provides full keyboard navigation and supports for screen readers such as VoiceOver, TalkBack, NVDA, and Orca.         | ✅         |
+| **Accessibility**                          | Provides full keyboard navigation and support for screen readers such as VoiceOver, TalkBack, NVDA, and Orca.         | ✅         |
 | **Visual & Focus Aids**                    | Reading ruler, paragraph-by-paragraph reading mode, and speed reading features.                                        | ✅         |
 
 ## Planned Features
@@ -106,9 +109,7 @@ Several changes in this fork were directly ported from or inspired by the work o
 | ------------------------------- | -------------------------------------------------------------------------- | ------------ |
 | **AI-Powered Summarization**    | Generate summaries of books or chapters using AI for quick insights.       | 🛠           |
 | **Advanced Reading Stats**      | Track reading time, pages read, and more for detailed insights.            | 🛠           |
-| **Audiobook Support**           | Extend functionality to play and manage audiobooks.                        | 🔄           |
 | **Handwriting Annotations**     | Add support for handwriting annotations using a pen on compatible devices. | 🔄           |
-| **In-Library Full-Text Search** | Search across your entire ebook library to find topics and quotes.         | 🔄           |
 
 Stay tuned for continuous improvements and updates! Contributions and suggestions are always welcome—let's build the ultimate reading experience together. 😊
 
@@ -146,121 +147,59 @@ Stay tuned for continuous improvements and updates! Contributions and suggestion
 - Linux users can also install [Readest on Flathub][link-flathub].
 - Web: Visit and use **Readest for Web** at [https://web.readest.com][link-web-readest].
 
+#### Nix
+
+> [!NOTE]
+> The Nix package supports `x86_64-linux` only. nix-darwin is not supported.
+
+Try it without installing. `--accept-flake-config` opts in to the project's
+binary cache; without it Nix builds the whole Rust/Tauri stack from source.
+
+```sh
+nix run --accept-flake-config github:readest/readest
+```
+
+To install it, add the input to your `flake.nix`:
+
+```nix
+# Due to a limitation in how Nix fetches submodules, a regular GitHub input type will fail to evaluate.
+inputs.readest = {
+  url = "https://github.com/readest/readest.git";
+  type = "git";
+  submodules = true;
+};
+```
+
+then in `configuration.nix` add the package and the cache. The cache is needed
+here as well because a flake input's own `nixConfig` does not apply to your
+system build:
+
+```nix
+environment.systemPackages = [
+  inputs.readest.packages.${pkgs.stdenv.hostPlatform.system}.default
+];
+
+nix.settings = {
+  substituters = [ "https://readest.cachix.org" ];
+  trusted-public-keys = [
+    "readest.cachix.org-1:KvKAePcZZCZB8ytFIAOGdgN3VRdmFHGRMHqMVckbt5c="
+  ];
+};
+```
+
 ## Documentation
 
 Guides, tutorials, and FAQs for installing and using Readest live in the official documentation:
 
 📖 **[https://readest.com/docs][link-docs]**
 
-## Requirements
+Contributor references live in the repository: [architecture](./apps/readest-app/docs/architecture.md),
+[code layout](./apps/readest-app/docs/code-layout.md), and
+[testing](./apps/readest-app/docs/testing.md).
 
-- **Node.js** and **pnpm** for Next.js development
-- **Rust** and **Cargo** for Tauri development
+## Building from Source
 
-For the best experience to build Readest for yourself, use a recent version of Node.js and Rust. Refer to the [Tauri documentation](https://v2.tauri.app/start/prerequisites/) for details on setting up the development environment prerequisites on different platforms.
-
-```bash
-nvm install v24
-nvm use v24
-npm install -g pnpm
-rustup update
-```
-
-## Getting Started
-
-To get started with Readest, follow these steps to clone and build the project.
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/readest/readest.git
-cd readest
-```
-
-### 2. Install Dependencies
-
-```bash
-# might need to rerun this when code is updated
-git submodule update --init --recursive
-pnpm install
-# copy vendors dist libs to public directory
-pnpm --filter @readest/readest-app setup-vendors
-```
-
-### 3. Verify Dependencies Installation
-
-To confirm that all dependencies are correctly installed, run the following command:
-
-```bash
-pnpm tauri info
-```
-
-This command will display information about the installed Tauri dependencies and configuration on your platform. Note that the output may vary depending on the operating system and environment setup. Please review the output specific to your platform for any potential issues.
-
-For Windows targets, "Build Tools for Visual Studio 2022" (or a higher edition of Visual Studio) and the "Desktop development with C++" workflow must be installed. For Windows ARM64 targets, the "VS 2022 C++ ARM64 build tools" and "C++ Clang Compiler for Windows" components must be installed. And make sure `clang` can be found in the path by adding `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin` for example in the environment variable `Path`.
-
-### 4. Build for Development
-
-```bash
-# Start development for the Tauri app
-pnpm tauri dev
-# or start development for the Web app
-pnpm dev-web
-# preview with OpenNext build for the Web app
-pnpm preview
-```
-
-For Android:
-
-```bash
-# Initialize the Android environment (run once)
-rm apps/readest-app/src-tauri/gen/android
-pnpm tauri android init
-pnpm tauri icon ../../data/icons/readest-book.png
-git checkout apps/readest-app/src-tauri/gen/android
-
-pnpm tauri android dev
-# or if you want to dev on a real device
-pnpm tauri android dev --host
-```
-
-For iOS:
-
-```bash
-# Set up the iOS environment (run once)
-pnpm tauri ios init
-pnpm tauri icon ../../data/icons/readest-book.png
-
-pnpm tauri ios dev
-# or if you want to dev on a real device
-pnpm tauri ios dev --host
-```
-
-### 5. Build for Production
-
-```bash
-pnpm tauri build
-pnpm tauri android build
-pnpm tauri ios build
-```
-
-Please refer to our release script if you experience any issues:
-https://github.com/readest/readest/blob/main/.github/workflows/release.yml
-
-### 6. Setup dev environment with Nix
-
-If you have Nix installed, you can leverage flake to enter a development shell
-with all the necessary dependencies:
-
-```bash
-nix develop ./ops  # enter a dev shell for the web app
-nix develop ./ops#ios # enter a dev shell for the ios app
-nix develop ./ops#android # enter a dev shell for the android app
-```
-
-### 7. More information
-
-Please check the [wiki][link-gh-wiki] of this project for more information on development.
+To build Readest from the latest commit, see [Getting Started](./CONTRIBUTING.md#getting-started).
 
 ## Troubleshooting
 
@@ -295,35 +234,31 @@ Please check the [wiki][link-gh-wiki] of this project for more information on de
 
 - See Issue [readest/readest#358](https://github.com/readest/readest/issues/358) for further details, or head over to our [Discord][link-discord] server and open a support discussion with detailed logs of your environment and the steps you've taken.
 
-### 2. AppImage Launches but Only Shows a Taskbar Icon
+### Linux Fails to Launch on Wayland / Niri
 
-On some Arch Linux systems—especially those using Wayland—the Readest AppImage may briefly show an icon in the taskbar and then exit without opening a window.
+Current Linux builds, including Flatpak, use CEF with an X11 window backend.
+Wayland sessions therefore need XWayland. Without a `DISPLAY`, older builds exit
+with `Runtime(CreateWindow)` before opening a window.
 
-You might see logs such as:
+On Niri, install `xwayland-satellite` 0.7 or later using your distribution's package manager
+and restart your Niri session. Niri 25.08 and later can start it on demand and
+set `DISPLAY` for applications. See [Niri's XWayland setup instructions](https://niri-wm.github.io/niri/Xwayland.html).
 
-```
-Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...
-```
+From a terminal in that session, check `printenv DISPLAY`, then launch Readest:
 
-This behavior is usually caused by compatibility issues between the bundled AppImage libraries and the system's EGL / Wayland environment.
-
-**Workaround 1: Launch with LD_PRELOAD (recommended)**
-
-You can preload the system Wayland client library before launching the AppImage:
-
-```
-LD_PRELOAD=/usr/lib/libwayland-client.so /path/to/Readest.AppImage
+```sh
+flatpak run com.bilingify.readest
 ```
 
-This workaround has been confirmed to resolve the issue on affected systems.
-
-**Workaround 2: Use the Flatpak Version**
-
-If you prefer a more reliable out-of-the-box experience on Arch Linux, consider using the [Flatpak build on Flathub][link-flathub] instead. The Flatpak runtime helps avoid system library mismatches and tends to behave more consistently across different Wayland and X11 setups.
+The Flatpak already requests the X11 socket. If you have customized its sandbox
+permissions, allow that socket as well. Setting `DISPLAY` to an arbitrary value
+does not start XWayland; use the value provided by your session.
+`--ozone-platform=wayland` cannot enable native Wayland support in this runtime,
+and WebKitGTK environment variables do not affect CEF.
 
 ## Contributors
 
-Readest is open-source, and contributions are welcome! Feel free to open issues, suggest features, or submit pull requests. Please **review our [contributing guidelines](CONTRIBUTING.md) before you start**. We also welcome you to join our [Discord][link-discord] community for either support or contributing guidance.
+Readest is open-source, and contributions are welcome! Feel free to open issues, suggest features, or submit pull requests. Please **review our [contributing guidelines](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before you start**. We also welcome you to join our [Discord][link-discord] community for either support or contributing guidance.
 
 <a href="https://github.com/readest/readest/graphs/contributors">
   <p align="left">
@@ -333,7 +268,15 @@ Readest is open-source, and contributions are welcome! Feel free to open issues,
 
 ## Support
 
-If Readest has been useful to you, consider supporting its development at [donate.readest.com](https://donate.readest.com), where you'll find all available donation methods, including GitHub Sponsors, card payments, and crypto. Your contribution helps us fix bugs faster, improve performance, and keep building great features.
+If Readest has been useful to you, consider supporting its development at [donate.readest.com](https://donate.readest.com), where you'll find all available donation methods, including GitHub Sponsors, PayPal, card payments, and crypto. Your contribution helps us fix bugs faster, improve performance, and keep building great features.
+
+### Sponsors
+
+<p align="center">
+  <a title="Browser testing via TestMu AI" href="https://www.testmuai.com/?utm_medium=sponsor&utm_source=readest" target="_blank">
+    <img src="https://raw.githubusercontent.com/readest/readest/refs/heads/main/data/sponsors/testmu-ai-logo.png" style="vertical-align: middle;" width="250" />
+  </a>
+</p>
 
 ## License
 
@@ -392,4 +335,6 @@ We would also like to thank the [Web Chinese Fonts Plan](https://chinese-font.ne
 [link-deepwiki]: https://deepwiki.com/readest/readest
 [link-locales]: https://github.com/readest/readest/tree/main/apps/readest-app/public/locales
 [link-kosync-wiki]: https://github.com/readest/readest/wiki/Sync-with-Koreader-devices
+[link-readalong]: https://github.com/readest/readest/blob/main/apps/readest-app/docs/read-along-narration.md
+[link-storyteller]: https://storyteller-platform.dev/
 [link-reddit]: https://reddit.com/r/readest/

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Book, BookGroupType, BooksGroup, ReadingStatus } from '@/types/book';
+import { Book, BookGroupType, ReadingStatus } from '@/types/book';
 import { EnvConfigType, isTauriAppPlatform } from '@/services/environment';
 import { BOOK_UNGROUPED_NAME } from '@/services/constants';
 import { md5Fingerprint } from '@/utils/md5';
@@ -11,11 +11,12 @@ interface LibraryState {
   syncProgress: number;
   checkOpenWithBooks: boolean;
   checkLastOpenBooks: boolean;
-  currentBookshelf: (Book | BooksGroup)[];
+  currentBookshelf: Book[];
   selectedBooks: Set<string>; // hashes for books, ids for groups
   groups: Record<string, string>;
   hashIndex: Map<string, number>; // hash -> array index for O(1) lookup
   visibleLibrary: Book[];
+  coverThumbnails: Map<string, { coverHash: string | null; url: string }>;
   setIsSyncing: (syncing: boolean) => void;
   setSyncProgress: (progress: number) => void;
   setSelectedBooks: (ids: string[]) => void;
@@ -26,6 +27,7 @@ interface LibraryState {
   setCheckOpenWithBooks: (check: boolean) => void;
   setCheckLastOpenBooks: (check: boolean) => void;
   setLibrary: (books: Book[]) => void;
+  setBookCoverThumbnail: (hash: string, coverHash: string | null, url: string) => void;
   // The third parameter is required (no `?`) so a future caller cannot
   // accidentally clear `readingStatus` by omitting it. Pass the desired final
   // value explicitly: the existing `readingStatus`, `undefined` to clear, or
@@ -41,7 +43,7 @@ interface LibraryState {
     books: Book[],
     options?: { skipSave?: boolean },
   ) => Promise<void>;
-  setCurrentBookshelf: (bookshelf: (Book | BooksGroup)[]) => void;
+  setCurrentBookshelf: (bookshelf: Book[]) => void;
   refreshGroups: () => void;
   rebuildHashIndex: () => void;
   addGroup: (name: string) => BookGroupType;
@@ -70,6 +72,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   groups: {},
   hashIndex: new Map(),
   visibleLibrary: [],
+  coverThumbnails: new Map(),
   checkOpenWithBooks: isTauriAppPlatform(),
   checkLastOpenBooks: isTauriAppPlatform(),
 
@@ -82,20 +85,40 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     return idx !== undefined ? library[idx] : undefined;
   },
 
-  setCurrentBookshelf: (bookshelf: (Book | BooksGroup)[]) => {
+  setCurrentBookshelf: (bookshelf: Book[]) => {
     set({ currentBookshelf: bookshelf });
   },
 
   setCheckOpenWithBooks: (check) => set({ checkOpenWithBooks: check }),
   setCheckLastOpenBooks: (check) => set({ checkLastOpenBooks: check }),
   setLibrary: (books) => {
+    const coverThumbnails = new Map(get().coverThumbnails);
+    const liveCoverHashes = new Map(
+      books.filter((book) => !book.deletedAt).map((book) => [book.hash, book.coverHash ?? null]),
+    );
+    for (const [hash, thumbnail] of coverThumbnails) {
+      if (liveCoverHashes.get(hash) !== thumbnail.coverHash) coverThumbnails.delete(hash);
+    }
     set({
       library: books,
       libraryLoaded: true,
       hashIndex: buildHashIndex(books),
       visibleLibrary: books.filter((b) => !b.deletedAt),
+      coverThumbnails,
     });
     get().refreshGroups();
+  },
+
+  setBookCoverThumbnail: (hash, coverHash, url) => {
+    const { library, hashIndex, coverThumbnails } = get();
+    const idx = hashIndex.get(hash);
+    if (idx === undefined || (library[idx]?.coverHash ?? null) !== coverHash) return;
+
+    const current = coverThumbnails.get(hash);
+    if (current?.coverHash === coverHash && current.url === url) return;
+    const next = new Map(coverThumbnails);
+    next.set(hash, { coverHash, url });
+    set({ coverThumbnails: next });
   },
 
   // Immutable lightweight progress update — skips refreshGroups (which is the

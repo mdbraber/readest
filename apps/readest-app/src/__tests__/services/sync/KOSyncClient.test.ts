@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { KOSyncClient } from '@/services/sync/KOSyncClient';
+import { Book } from '@/types/book';
 import { KOSyncSettings } from '@/types/settings';
 
 // The LAN-server branch of KOSyncClient.request uses window.fetch (mocked
@@ -45,6 +46,80 @@ const jsonResponse = (status: number, body: unknown) => ({
   json: async () => body,
 });
 
+const makeBook = (): Book =>
+  ({
+    hash: 'f248ce0f15105ff390e5292085e0622b',
+    title: 'A Book',
+  }) as Book;
+
+describe('KOSyncClient.getProgress – server response shapes', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('accepts a progress payload that omits `document`', async () => {
+    // Not every KOSync-compatible server echoes the document hash back on GET.
+    // koreader-sync only selects progress/percentage/device/device_id/timestamp,
+    // so requiring `document` silently discarded a perfectly good remote
+    // position and the reader then pushed its stale one over it. (#5063, #5065)
+    setFetch(() =>
+      jsonResponse(200, {
+        progress: '/body/DocFragment[3]/body/div/p[12].0',
+        percentage: 0.0174,
+        device: 'KindlePaperWhite5',
+        device_id: '8F6F541940B74D32B606503DB6B43E0F',
+        timestamp: 1783773009,
+      }),
+    );
+
+    const client = new KOSyncClient(makeConfig({ userkey: 'key' }));
+    const progress = await client.getProgress(makeBook());
+
+    expect(progress).not.toBeNull();
+    expect(progress!.progress).toBe('/body/DocFragment[3]/body/div/p[12].0');
+    expect(progress!.percentage).toBe(0.0174);
+    // The requested hash stands in for the document the server left out.
+    expect(progress!.document).toBe('f248ce0f15105ff390e5292085e0622b');
+  });
+
+  it('accepts a progress payload that includes `document`', async () => {
+    setFetch(() =>
+      jsonResponse(200, {
+        document: 'f248ce0f15105ff390e5292085e0622b',
+        progress: '/body/DocFragment[3]/body/div/p[12].0',
+        percentage: 0.0174,
+        timestamp: 1783773009,
+      }),
+    );
+
+    const client = new KOSyncClient(makeConfig({ userkey: 'key' }));
+    const progress = await client.getProgress(makeBook());
+
+    expect(progress!.document).toBe('f248ce0f15105ff390e5292085e0622b');
+  });
+
+  it('returns null when a 200 body carries no usable position', async () => {
+    // Some servers answer "no progress stored" with 200 and a status body
+    // instead of a 404; that must not be mistaken for a remote position.
+    setFetch(() => jsonResponse(200, { status: 'not found' }));
+
+    const client = new KOSyncClient(makeConfig({ userkey: 'key' }));
+
+    expect(await client.getProgress(makeBook())).toBeNull();
+  });
+
+  it('returns null when the server answers 404', async () => {
+    setFetch(() => jsonResponse(404, { status: 'not found' }));
+
+    const client = new KOSyncClient(makeConfig({ userkey: 'key' }));
+
+    expect(await client.getProgress(makeBook())).toBeNull();
+  });
+});
+
 describe('KOSyncClient.connect – server validation', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -87,5 +162,160 @@ describe('KOSyncClient.connect – server validation', () => {
 
     expect(result.success).toBe(false);
     expect(mock).toHaveBeenCalled();
+  });
+});
+
+describe('KOSyncClient – custom headers', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sends configured custom headers on requests', async () => {
+    const mock = setFetch(() => jsonResponse(200, { authorized: 'OK' }));
+
+    const client = new KOSyncClient(
+      makeConfig({ customHeaders: { 'CF-Access-Client-Id': 'client-id' } }),
+    );
+    await client.connect('alice', 'secret');
+
+    const [, init] = mock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    // Headers.entries() lowercases header names, so the merged plain object
+    // built off it does too.
+    expect(headers['cf-access-client-id']).toBe('client-id');
+  });
+
+  it('does not let custom headers override KOSync auth headers', async () => {
+    const mock = setFetch(() => jsonResponse(200, { authorized: 'OK' }));
+
+    const client = new KOSyncClient(
+      makeConfig({
+        userkey: 'real-key',
+        customHeaders: { 'X-Auth-Key': 'attacker-supplied' },
+      }),
+    );
+    await client.getProgress(makeBook());
+
+    const [, init] = mock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers['x-auth-key']).toBe('real-key');
+  });
+});
+
+describe('KOSyncClient.updateProgress – document metadata', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const sentBody = (mock: FetchMock): Record<string, unknown> => {
+    const [, init] = mock.mock.calls[0] as [string, RequestInit];
+    return JSON.parse(init.body as string);
+  };
+
+  it('omits metadata by default, matching KOReader', async () => {
+    const mock = setFetch(() => jsonResponse(200, {}));
+
+    const client = new KOSyncClient(makeConfig({ userkey: 'key' }));
+    await client.updateProgress(makeBook(), '/body/DocFragment[12]', 0.14);
+
+    expect(sentBody(mock)).not.toHaveProperty('metadata');
+  });
+
+  it('sends filename, title and authors when Send Document Metadata is on', async () => {
+    const mock = setFetch(() => jsonResponse(200, {}));
+
+    const book = {
+      ...makeBook(),
+      title: 'The Count of Monte Cristo',
+      author: 'Alexandre Dumas',
+      format: 'EPUB',
+    } as Book;
+    const client = new KOSyncClient(makeConfig({ userkey: 'key', sendMetadata: true }));
+    await client.updateProgress(book, '/body/DocFragment[12]', 0.14);
+
+    const body = sentBody(mock);
+    expect(body['metadata']).toEqual({
+      filename: 'The Count of Monte Cristo.epub',
+      title: 'The Count of Monte Cristo',
+      authors: 'Alexandre Dumas',
+    });
+    // The standard fields are unchanged next to it.
+    expect(body['document']).toBe(book.hash);
+    expect(body['percentage']).toBe(0.14);
+  });
+
+  it('newline-joins structured authors instead of sending localized display punctuation', async () => {
+    const mock = setFetch(() => jsonResponse(200, {}));
+
+    const book = {
+      ...makeBook(),
+      author: 'Alexandre Dumas et Auguste Maquet',
+      format: 'EPUB',
+      metadata: {
+        author: [{ name: { en: 'Alexandre Dumas' } }, { name: { en: 'Auguste Maquet' } }],
+      },
+    } as unknown as Book;
+    const client = new KOSyncClient(makeConfig({ userkey: 'key', sendMetadata: true }));
+    await client.updateProgress(book, '/body/DocFragment[12]', 0.14);
+
+    const metadata = sentBody(mock)['metadata'] as Record<string, string>;
+    expect(metadata['authors']).toBe('Alexandre Dumas\nAuguste Maquet');
+  });
+
+  it.each([
+    {
+      label: 'trims string contributors and string names',
+      metadataAuthors: [' Alexandre Dumas ', { name: ' Auguste Maquet ' }],
+      expected: 'Alexandre Dumas\nAuguste Maquet',
+    },
+    {
+      label: 'uses the first non-empty translated name when the user language is missing',
+      metadataAuthors: [null, { name: { fr: ' Victor Hugo ' } }],
+      expected: 'Victor Hugo',
+    },
+    {
+      label: 'falls back to the display author when no structured name is usable',
+      metadataAuthors: [null, {}, { name: { en: '  ' } }],
+      expected: 'Fallback Author',
+    },
+  ])('$label', async ({ metadataAuthors, expected }) => {
+    const mock = setFetch(() => jsonResponse(200, {}));
+    const book = {
+      ...makeBook(),
+      author: 'Fallback Author',
+      format: 'EPUB',
+      metadata: { author: metadataAuthors },
+    } as unknown as Book;
+    const client = new KOSyncClient(makeConfig({ userkey: 'key', sendMetadata: true }));
+
+    await client.updateProgress(book, '/body/DocFragment[12]', 0.14);
+
+    const metadata = sentBody(mock)['metadata'] as Record<string, string>;
+    expect(metadata['authors']).toBe(expected);
+  });
+
+  it('names the file by its source title when that differs from the display title', async () => {
+    const mock = setFetch(() => jsonResponse(200, {}));
+
+    const book = {
+      ...makeBook(),
+      title: 'A Title the Reader Edited',
+      sourceTitle: 'original_import_name',
+      author: 'Someone',
+      format: 'EPUB',
+    } as Book;
+    const client = new KOSyncClient(makeConfig({ userkey: 'key', sendMetadata: true }));
+    await client.updateProgress(book, '/body/DocFragment[1]', 0.5);
+
+    const metadata = sentBody(mock)['metadata'] as Record<string, string>;
+    expect(metadata['filename']).toBe('original_import_name.epub');
+    // The title stays the one the user sees.
+    expect(metadata['title']).toBe('A Title the Reader Edited');
   });
 });

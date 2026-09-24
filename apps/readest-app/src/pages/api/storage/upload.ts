@@ -7,7 +7,15 @@ import {
   STORAGE_QUOTA_GRACE_BYTES,
 } from '@/utils/access';
 import { getDownloadSignedUrl, getUploadSignedUrl, isSafeObjectKeyName } from '@/utils/object';
-import { READEST_PUBLIC_STORAGE_BASE_URL } from '@/services/constants';
+import {
+  READEST_PUBLIC_ASSETS_BASE_URL,
+  READEST_PUBLIC_STORAGE_BASE_URL,
+} from '@/services/constants';
+
+// Public media prefixes that may be uploaded into the public bucket. Keys are
+// content-addressed by the caller (media/<kind>/<user-seg>/<hash>.<ext>), so
+// unlike `temp/` objects they are durable and their URLs never rotate.
+const PUBLIC_MEDIA_KINDS = ['book_covers'];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   await runMiddleware(req, res, corsAllMethods);
@@ -21,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ error: 'Not authenticated' });
   }
 
-  const { fileName, fileSize, bookHash, replicaKind, replicaId, temp = false } = req.body;
+  const { fileName, fileSize, bookHash, replicaKind, replicaId, temp = false, media } = req.body;
 
   // Reject object-key path traversal before building any key. `fileName` is
   // fully client-controlled and is interpolated into `${user.id}/${fileName}`;
@@ -31,12 +39,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'Invalid fileName' });
   }
 
+  if (media) {
+    if (!PUBLIC_MEDIA_KINDS.includes(media)) {
+      return res.status(400).json({ error: 'Invalid media' });
+    }
+    try {
+      const userStr = user.id.split('-')[0];
+      const fileKey = `media/${media}/${userStr}/${fileName}`;
+      const bucketName = process.env['TEMP_STORAGE_PUBLIC_BUCKET_NAME'] || '';
+      const uploadUrl = await getUploadSignedUrl(fileKey, fileSize, 1800, bucketName);
+      return res.status(200).json({
+        uploadUrl,
+        downloadUrl: `${READEST_PUBLIC_ASSETS_BASE_URL}/${fileKey}`,
+      });
+    } catch (error) {
+      console.error('Error creating presigned post for media file:', error);
+      return res.status(500).json({ error: 'Could not create presigned post' });
+    }
+  }
+
   if (temp) {
     try {
-      const datetime = new Date();
-      const timeStr = datetime.toISOString().replace(/[-:]/g, '').replace('T', '').slice(0, 10);
+      // The key carries no timestamp: `fileName` is content-addressed by the
+      // caller, so the same image always resolves to the same public URL. It
+      // used to embed the wall-clock hour, which handed Discord Rich Presence
+      // a brand-new external asset to fetch every hour — and every failed
+      // fetch dropped the cover back to the app icon (issue #5352). A stable
+      // URL lets Discord's media proxy reuse what it already resolved.
+      // Re-uploads overwrite in place, so bucket retention still applies.
       const userStr = user.id.slice(0, 8);
-      const fileKey = `temp/img/${timeStr}/${userStr}/${fileName}`;
+      const fileKey = `temp/img/${userStr}/${fileName}`;
       const bucketName = process.env['TEMP_STORAGE_PUBLIC_BUCKET_NAME'] || '';
       const uploadUrl = await getUploadSignedUrl(fileKey, fileSize, 1800, bucketName);
       const downloadUrl = await getDownloadSignedUrl(fileKey, 3 * 86400, bucketName);
@@ -58,13 +90,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Missing file info' });
     }
 
-    const { usage, quota } = getStoragePlanData(token);
+    // `quota` is an entitlement — it only moves on purchase or refund, so
+    // reading it from the token is fine. `usage` is a live counter: the claim
+    // is frozen when the access token is minted, so authorising against it
+    // measured every upload in that window against the same stale baseline
+    // and let an account keep uploading past its quota until the token
+    // refreshed. Read the counter the trigger maintains instead, and fall
+    // back to the claim rather than to zero if the row can't be read.
+    const { usage: claimUsage, quota } = getStoragePlanData(token);
+    const supabase = createSupabaseAdminClient();
+    const { data: planRow } = await supabase
+      .from('plans')
+      .select('storage_usage_bytes')
+      .eq('id', user.id)
+      .single();
+    const usage = planRow?.storage_usage_bytes ?? claimUsage;
+
     if (usage + fileSize > quota + STORAGE_QUOTA_GRACE_BYTES) {
       return res.status(403).json({ error: 'Insufficient storage quota', usage });
     }
 
     const fileKey = `${user.id}/${fileName}`;
-    const supabase = createSupabaseAdminClient();
     const { data: existingRecord, error: fetchError } = await supabase
       .from('files')
       .select('*')

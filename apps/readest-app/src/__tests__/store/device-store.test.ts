@@ -190,6 +190,26 @@ describe('deviceStore', () => {
     });
   });
 
+  describe('syncScreenBrightness', () => {
+    test('records what the device currently reports', async () => {
+      const { getScreenBrightness } = await import('@/utils/bridge');
+      vi.mocked(getScreenBrightness).mockResolvedValue({ brightness: 0.3 });
+
+      useDeviceControlStore.setState({ lastScreenBrightness: 0.9 });
+      await useDeviceControlStore.getState().syncScreenBrightness();
+      expect(useDeviceControlStore.getState().lastScreenBrightness).toBe(0.3);
+    });
+
+    test('records null when the device reports no app override', async () => {
+      const { getScreenBrightness } = await import('@/utils/bridge');
+      vi.mocked(getScreenBrightness).mockResolvedValue({ brightness: -1 });
+
+      useDeviceControlStore.setState({ lastScreenBrightness: 0.9 });
+      await useDeviceControlStore.getState().syncScreenBrightness();
+      expect(useDeviceControlStore.getState().lastScreenBrightness).toBeNull();
+    });
+  });
+
   // ── Native touch events ────────────────────────────────────────
   describe('listenToNativeTouchEvents', () => {
     test('sets window.onNativeTouch handler', () => {
@@ -291,6 +311,17 @@ describe('deviceStore', () => {
         keyName: 'Back',
         keyCode: 4,
       });
+    });
+  });
+
+  // ── Pencil gesture forwarding (#5501) ──────────────────────────
+  describe('ensureKeyForwarding', () => {
+    test('installs the native key handler without touching interception', async () => {
+      const { interceptKeys } = await import('@/utils/bridge');
+      useDeviceControlStore.getState().ensureKeyForwarding();
+
+      expect(window.onNativeKeyDown).toBeDefined();
+      expect(interceptKeys).not.toHaveBeenCalled();
     });
   });
 });

@@ -15,6 +15,81 @@ export interface ProgressPayload {
 
 export type ProgressHandler = (progress: ProgressPayload) => void;
 
+/**
+ * Percentage sentinel for "running, but the byte total is unknown". Chunked
+ * responses, buffered fallbacks and queued-but-not-started transfers have no
+ * total to divide by; reporting 0 there renders as a frozen 0%, so progress
+ * surfaces render this as an indeterminate state instead.
+ */
+export const INDETERMINATE_PROGRESS = -1;
+
+/** Bytes to a 0-100 percentage, or {@link INDETERMINATE_PROGRESS}. */
+export const toProgressPercent = (progress: ProgressPayload): number =>
+  progress.total > 0 ? (progress.progress / progress.total) * 100 : INDETERMINATE_PROGRESS;
+
+export interface ProgressThrottle {
+  /** Record a progress payload, emitting at most once per interval. */
+  push: (progress: ProgressPayload) => void;
+  /** Emit any pending payload immediately (e.g. when the transfer finishes). */
+  flush: () => void;
+  /** Drop any pending payload and clear the trailing timer. */
+  cancel: () => void;
+}
+
+/**
+ * Coalesce high-frequency progress emissions to at most one per `intervalMs`
+ * (leading + trailing edges). Web and native download streams call onProgress
+ * once per chunk, often as a dense microtask burst for already-buffered sources
+ * (`while (true) { await reader.read(); onProgress(...) }`), and `transferSpeed`
+ * is recomputed from wall-clock time on every call. Emitting each one churns the
+ * transfer store per chunk and sustains a synchronous React update storm past
+ * the nested-update limit (Sentry READEST-2). Throttling caps store writes and
+ * defers the trailing emit to a macrotask, so the render fan-out cannot loop.
+ */
+export const createProgressThrottle = (
+  emit: (progress: ProgressPayload) => void,
+  intervalMs: number,
+): ProgressThrottle => {
+  let lastEmit = Number.NEGATIVE_INFINITY;
+  let pending: ProgressPayload | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const fire = () => {
+    timer = null;
+    if (!pending) return;
+    const payload = pending;
+    pending = null;
+    lastEmit = Date.now();
+    emit(payload);
+  };
+
+  return {
+    push: (progress) => {
+      pending = progress;
+      const elapsed = Date.now() - lastEmit;
+      if (elapsed >= intervalMs) {
+        fire();
+      } else if (timer === null) {
+        timer = setTimeout(fire, intervalMs - elapsed);
+      }
+    },
+    flush: () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      fire();
+    },
+    cancel: () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      pending = null;
+    },
+  };
+};
+
 export const webUpload = (file: File, uploadUrl: string, onProgress?: ProgressHandler) => {
   return new Promise<void>((resolve, reject) => {
     const startTime = Date.now();

@@ -2,8 +2,14 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { isTauriAppPlatform } from '@/services/environment';
 import { READEST_OPDS_USER_AGENT } from '@/services/constants';
 import { useSettingsStore } from '@/store/settingsStore';
-import { needsProxy, getProxiedURL, probeAuth } from '@/app/opds/utils/opdsReq';
-import { normalizeOPDSCustomHeaders } from '@/app/opds/utils/customHeaders';
+import {
+  needsProxy,
+  getProxiedURL,
+  probeAuth,
+  withOriginSuppressed,
+} from '@/app/opds/utils/opdsReq';
+import { normalizeCustomHeaders } from '@/utils/customHeaders';
+import { trackWidePages, type WidePagesOptions } from '@/utils/spread';
 import type { BookFormat } from '@/types/book';
 import type { BookDoc, BookMetadata } from '@/libs/document';
 
@@ -34,7 +40,7 @@ export const createPseStreamPageLoader = (data: PseStreamData) => {
   const catalog = settings.opdsCatalogs?.find((c) => c.id === data.catalogId);
   const username = catalog?.username || '';
   const password = catalog?.password || '';
-  const customHeaders = normalizeOPDSCustomHeaders(catalog?.customHeaders);
+  const customHeaders = normalizeCustomHeaders(catalog?.customHeaders);
   let authHeaderPromise: Promise<string | null> | null = null;
 
   return async (pageIndex: number): Promise<Blob> => {
@@ -51,11 +57,11 @@ export const createPseStreamPageLoader = (data: PseStreamData) => {
     const authHeader = await authHeaderPromise;
 
     const fetchURL = useProxy ? getProxiedURL(url, authHeader || '', true, customHeaders) : url;
-    const headers: Record<string, string> = {
+    const headers: Record<string, string> = withOriginSuppressed({
       'User-Agent': READEST_OPDS_USER_AGENT,
       ...(!useProxy ? customHeaders : {}),
       ...(!useProxy && authHeader ? { Authorization: authHeader } : {}),
-    };
+    });
     const fetch = isTauriAppPlatform() ? tauriFetch : window.fetch;
     const res = await fetch(fetchURL, {
       headers,
@@ -70,6 +76,7 @@ export const createPseStreamPageLoader = (data: PseStreamData) => {
 
 export const openPseStreamBook = async (
   data: PseStreamData,
+  widePages?: WidePagesOptions,
 ): Promise<{ book: BookDoc; format: BookFormat }> => {
   const loadPage = createPseStreamPageLoader(data);
   const entries = Array.from({ length: data.count }).map((_, i) => ({
@@ -90,7 +97,10 @@ export const openPseStreamBook = async (
   const { makeComicBook } = await import('foliate-js/comic-book.js');
   // makeComicBook only consults `file.name` as a fallback title; we override
   // metadata from `data` regardless, so a name-only stand-in is sufficient.
-  const rawComicBook = await makeComicBook(loader, { name: data.title });
+  // Each page streams in on its own request, so it is measured as it arrives.
+  const pages = widePages && trackWidePages(loader, widePages.onFound);
+  const rawComicBook = await makeComicBook(pages?.loader ?? loader, { name: data.title });
+  pages?.attach(rawComicBook.sections, widePages?.known ?? []);
   const book = {
     ...rawComicBook,
     dir: 'auto',

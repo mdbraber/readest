@@ -1,9 +1,23 @@
 import { redirect, useRouter } from 'next/navigation';
 import { getCurrentWindow, ScrollBarStyle } from '@tauri-apps/api/window';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { version as osVersion } from '@tauri-apps/plugin-os';
 import { isPWA, isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
 import { BOOK_IDS_SEPARATOR } from '@/services/constants';
 import { AppService } from '@/types/system';
+
+// Windows 10 renders the native shadow of an undecorated window as a 1px
+// border on the left, right and bottom edges but not the top, which reads as
+// a broken frame (tauri-apps/tauri#13134). Windows 11 draws a uniform border,
+// so only there is the shadow worth keeping. Keep in sync with
+// `undecorated_shadow_is_symmetric` in src-tauri/src/lib.rs.
+const WINDOWS_11_BUILD = 22000;
+
+const undecoratedShadowIsSymmetric = (appService: AppService) => {
+  if (!appService.isWindowsApp) return true;
+  const build = parseInt(osVersion().split('.')[2] ?? '', 10);
+  return Number.isNaN(build) ? true : build >= WINDOWS_11_BUILD;
+};
 
 let readerWindowsCount = 0;
 const createReaderWindow = (appService: AppService, url: string) => {
@@ -16,12 +30,12 @@ const createReaderWindow = (appService: AppService, url: string) => {
     height: 600,
     center: true,
     resizable: true,
-    title: appService.isMacOSApp ? '' : 'Readest',
+    title: 'Readest',
     decorations: !!appService.isMacOSApp,
     // Linux stays opaque: a transparent WebKitGTK window turns invisible when
     // its web process is busy (#3682). macOS uses native decorations instead.
     transparent: !appService.isMacOSApp && !appService.isLinuxApp,
-    shadow: appService.isMacOSApp ? undefined : true,
+    shadow: appService.isMacOSApp ? undefined : undecoratedShadowIsSymmetric(appService),
     titleBarStyle: appService.isMacOSApp ? 'overlay' : undefined,
     // Enum ScrollBarStyle is exported as type by tauri, so it cannot be used directly.
     scrollBarStyle: (appService.osPlatform === 'windows'
@@ -40,9 +54,13 @@ const createReaderWindow = (appService: AppService, url: string) => {
   });
 };
 
-export const showReaderWindow = (appService: AppService, bookIds: string[]) => {
+export const showReaderWindow = (
+  appService: AppService,
+  bookIds: string[],
+  queryParams?: string,
+) => {
   const ids = bookIds.join(BOOK_IDS_SEPARATOR);
-  const params = new URLSearchParams('');
+  const params = new URLSearchParams(queryParams || '');
   params.set('ids', ids);
   const url = `/reader?${params.toString()}`;
   createReaderWindow(appService, url);
@@ -74,12 +92,12 @@ export const ensureMainLibraryWindow = async (appService: AppService) => {
     height: 600,
     center: true,
     resizable: true,
-    title: appService.isMacOSApp ? '' : 'Readest',
+    title: 'Readest',
     decorations: !!appService.isMacOSApp,
     // Linux stays opaque: a transparent WebKitGTK window turns invisible when
     // its web process is busy (#3682). macOS uses native decorations instead.
     transparent: !appService.isMacOSApp && !appService.isLinuxApp,
-    shadow: appService.isMacOSApp ? undefined : true,
+    shadow: appService.isMacOSApp ? undefined : undecoratedShadowIsSymmetric(appService),
     titleBarStyle: appService.isMacOSApp ? 'overlay' : undefined,
     scrollBarStyle: (appService.osPlatform === 'windows'
       ? 'fluentOverlay'

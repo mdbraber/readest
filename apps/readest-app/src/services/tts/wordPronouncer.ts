@@ -1,5 +1,6 @@
 import { AppService } from '@/types/system';
 import { EdgeSpeechTTS, EdgeTTSPayload } from '@/libs/edgeTTS';
+import { isTauriAppPlatform } from '@/services/environment';
 import { isSameLang } from '@/utils/lang';
 import { genSSMLRaw } from '@/utils/ssml';
 import { TTSClient } from './TTSClient';
@@ -14,8 +15,8 @@ import type { TTSAudioContext } from './WebAudioPlayer';
 // trip synthesizing "test") and never spins up a full speaking session — it
 // calls EdgeSpeechTTS directly (whose static MP3 cache makes repeat words
 // instant) and schedules one chunk on a dedicated Web Audio context. Edge is
-// tried first (wss, then the authenticated https proxy); any failure drops to
-// the platform speech client so a word still speaks offline. See issue #4876.
+// tried first while online (wss, then the authenticated https proxy); offline
+// requests and Edge failures use the platform speech client. See issue #4876.
 
 const EDGE_TTS_NAME = 'edge-tts';
 const DEFAULT_EDGE_VOICE = 'en-US-AriaNeural';
@@ -84,12 +85,15 @@ export const cancelWordPronounce = (): void => {
 };
 
 // Edge audio bytes: direct wss first; on failure the authenticated https proxy
-// (the reader's own fallback for networks that block Bing). The proxy throws
+// (the reader's own fallback for browsers that block Bing). The proxy throws
 // "Not authenticated" when logged out, which propagates to the speech fallback.
+// On Tauri the native wss transport is the only Edge path — never retry via
+// the proxy (a cross-origin /api/tts/edge request, e.g. fired when offline).
 const fetchEdgeAudio = async (payload: EdgeTTSPayload): Promise<ArrayBuffer> => {
   try {
     return (await edgeWss.createAudioData(payload)).data;
-  } catch {
+  } catch (err) {
+    if (isTauriAppPlatform()) throw err;
     return (await edgeHttps.createAudioData(payload)).data;
   }
 };
@@ -156,7 +160,8 @@ export const pronounceWord = async (
   stopFallback();
 
   const player = getPlayer();
-  if (player) {
+  const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+  if (player && !isOffline) {
     try {
       const voice = pickEdgeVoiceId(voiceLang);
       const data = await fetchEdgeAudio({

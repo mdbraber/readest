@@ -9,32 +9,42 @@
  * handoff is supported, enabling it stays exclusive and locks the rest.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import * as sortable from '@dnd-kit/sortable';
 
 import CustomDictionaries from '@/components/settings/CustomDictionaries';
 import { useCustomDictionaryStore } from '@/store/customDictionaryStore';
 import { BUILTIN_PROVIDER_IDS } from '@/services/dictionaries/types';
 import type { DictionarySettings } from '@/services/dictionaries/types';
+import { eventDispatcher } from '@/utils/event';
 
 // Per-test platform control. `isSystemDictionaryEnabled` (real, from the
 // registry) reads `isSystemDictionarySupported`, so toggling these flips both
 // the row visibility and the lock gate the component now relies on.
 const platform = vi.hoisted(() => ({ supported: false, available: false }));
+const mocks = vi.hoisted(() => ({
+  importDictionaries: vi.fn(),
+  selectFiles: vi.fn(),
+}));
 vi.mock('@/services/dictionaries/systemDictionary', () => ({
   isSystemDictionarySupported: () => platform.supported,
   isSystemDictionaryAvailable: () => platform.available,
 }));
 
 vi.mock('@/hooks/useTranslation', () => ({
-  useTranslation: () => (s: string) => s,
+  useTranslation: () => (s: string, values?: Record<string, string | number>) =>
+    s.replace(/\{\{(\w+)\}\}/gu, (_match, key: string) => String(values?.[key] ?? '')),
 }));
 
 vi.mock('@/context/EnvContext', () => ({
-  useEnv: () => ({ appService: {}, envConfig: {} }),
+  useEnv: () => ({
+    appService: { importDictionaries: mocks.importDictionaries },
+    envConfig: {},
+  }),
 }));
 
 vi.mock('@/hooks/useFileSelector', () => ({
-  useFileSelector: () => ({ selectFiles: vi.fn() }),
+  useFileSelector: () => ({ selectFiles: mocks.selectFiles }),
 }));
 
 vi.mock('@/services/sync/replicaBinaryUpload', () => ({
@@ -69,16 +79,35 @@ const enabledSystemSettings: DictionarySettings = {
   webSearches: [],
 };
 
+// Provider rows use the compact `toggle-sm`; the panel's own preference
+// switches (SettingsSwitchRow) use the default size, so this stays scoped to
+// the sortable provider list as more switches are added below it.
 const getToggles = (container: HTMLElement) =>
-  Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+  Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"].toggle-sm'));
 
 beforeEach(() => {
   platform.supported = false;
   platform.available = false;
+  mocks.importDictionaries.mockReset();
+  mocks.selectFiles.mockReset();
 });
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
+});
+
+it('preserves dictionary row dimensions when dragging over a differently sized row', () => {
+  seedSettings(enabledSystemSettings);
+  const useSortable = sortable.useSortable;
+  vi.spyOn(sortable, 'useSortable').mockImplementation((options) => ({
+    ...useSortable(options),
+    transform: { x: 12, y: 24, scaleX: 0.5, scaleY: 1.5 },
+  }));
+  render(<CustomDictionaries onBack={() => {}} />);
+  const row = screen.getAllByRole('button', { name: 'Drag to reorder' })[0]!.parentElement!;
+  expect(row.style.transform).toContain('translate3d(12px, 24px, 0)');
+  expect(row.style.transform).not.toContain('scale');
 });
 
 describe('CustomDictionaries — system-dictionary lock', () => {
@@ -115,5 +144,96 @@ describe('CustomDictionaries — system-dictionary lock', () => {
     expect(systemToggle!.title).not.toBe(LOCKED_TITLE);
     expect(otherToggles.every((t) => t.disabled)).toBe(true);
     expect(otherToggles.every((t) => t.title === LOCKED_TITLE)).toBe(true);
+  });
+});
+
+describe('CustomDictionaries — import progress', () => {
+  it('shows the Yomitan indexing percentage while a ZIP import is running', async () => {
+    seedSettings({ providerOrder: [], providerEnabled: {}, webSearches: [] });
+    mocks.selectFiles.mockResolvedValue({
+      files: [{ file: new File(['dictionary'], 'jitendex.zip') }],
+    });
+
+    let finishImport: ((result: unknown) => void) | undefined;
+    mocks.importDictionaries.mockImplementation(
+      (
+        _files: unknown,
+        _existing: unknown,
+        onProgress?: (progress: { stage: string; completed: number; total?: number }) => void,
+      ) =>
+        new Promise((resolve) => {
+          finishImport = resolve;
+          onProgress?.({ stage: 'indexing', completed: 1, total: 4 });
+        }),
+    );
+
+    render(<CustomDictionaries onBack={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Import Dictionary' }));
+
+    expect(
+      (await screen.findByRole('button', { name: 'Indexing… 25%' })) as HTMLButtonElement,
+    ).toMatchObject({ disabled: true });
+
+    await act(async () => {
+      finishImport?.({ imported: [], replacements: [], orphanFiles: [] });
+    });
+    expect(
+      (await screen.findByRole('button', { name: 'Import Dictionary' })) as HTMLButtonElement,
+    ).toMatchObject({ disabled: false });
+  });
+
+  it('reports a failed plugin source while retaining successful imports', async () => {
+    seedSettings({ providerOrder: [], providerEnabled: {}, webSearches: [] });
+    mocks.selectFiles.mockResolvedValue({
+      files: [
+        { file: new File(['valid'], 'valid.zip') },
+        { file: new File(['broken'], 'broken.zip') },
+      ],
+    });
+    mocks.importDictionaries.mockResolvedValue({
+      imported: [],
+      replacements: [],
+      orphanFiles: [],
+      importErrors: [{ name: 'broken.zip', message: 'Invalid Yomitan bank' }],
+    });
+    const dispatch = vi.spyOn(eventDispatcher, 'dispatch');
+
+    render(<CustomDictionaries onBack={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Import Dictionary' }));
+
+    await waitFor(() =>
+      expect(dispatch).toHaveBeenCalledWith(
+        'toast',
+        expect.objectContaining({
+          type: 'error',
+          message: 'Failed to import dictionary: broken.zip: Invalid Yomitan bank',
+        }),
+      ),
+    );
+  });
+});
+
+describe('CustomDictionaries — auto-play pronunciation (#6265)', () => {
+  const baseSettings: DictionarySettings = {
+    providerOrder: [BUILTIN_PROVIDER_IDS.wiktionary],
+    providerEnabled: { [BUILTIN_PROVIDER_IDS.wiktionary]: true },
+    webSearches: [],
+  };
+
+  it('reflects the stored setting and persists a toggle', async () => {
+    const saveCustomDictionaries = vi.fn().mockResolvedValue(undefined);
+    seedSettings({ ...baseSettings, autoPlayPronunciation: false });
+    useCustomDictionaryStore.setState({ saveCustomDictionaries });
+
+    render(<CustomDictionaries onBack={() => {}} />);
+    const toggle = screen.getByRole('checkbox', { name: 'Auto-play Pronunciation' });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    expect(useCustomDictionaryStore.getState().settings.autoPlayPronunciation).toBe(true);
+    expect(saveCustomDictionaries).toHaveBeenCalled();
   });
 });

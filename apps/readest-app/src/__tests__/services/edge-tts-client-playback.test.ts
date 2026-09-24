@@ -32,6 +32,14 @@ vi.mock('@/utils/ssml', () => ({
 
 vi.mock('@/utils/misc', () => ({
   getUserLocale: vi.fn((lang: string) => (lang === 'en' ? 'en-US' : lang)),
+  // Pins the WebAudioPlayer path: iOS Tauri selects the native playout.
+  getOSPlatform: vi.fn(() => 'macos'),
+  stubTranslation: (key: string) => key,
+}));
+
+vi.mock('@/services/environment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/environment')>()),
+  isTauriAppPlatform: () => false,
 }));
 
 vi.mock('@/services/tts/TTSUtils', () => ({
@@ -102,6 +110,7 @@ describe('EdgeTTSClient Web Audio playback', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -148,12 +157,111 @@ describe('EdgeTTSClient Web Audio playback', () => {
 
   test('chunks are scheduled with a rate-scaled gap and no element restarts', async () => {
     const client = await startClient();
-    await client.setRate(1); // gap = 0.15 / 1
+    await client.setRate(1); // default gap, unscaled at 1.0x
     const { done } = collectSpeak(client, new AbortController().signal);
     await flush();
     await flush();
     const [first, second] = ctx().sources;
     expect(second!.startedAt! - first!.endTime).toBeCloseTo(0.15, 5);
+    await ctx().advanceTo(5);
+    await done;
+  });
+
+  test('the gap it is given is scheduled as-is at a faster rate', async () => {
+    const client = await startClient();
+    await client.setRate(2);
+    // The gap arrives already scaled for 2x (see scaleGapForRate). Scaling it
+    // again here left 0.05s between sentences and ran them together (#5750).
+    client.setSentenceGap(0.1);
+    const { done } = collectSpeak(client, new AbortController().signal);
+    await flush();
+    await flush();
+    const [first, second] = ctx().sources;
+    expect(second!.startedAt! - first!.endTime).toBeCloseTo(0.1, 5);
+    await ctx().advanceTo(5);
+    await done;
+  });
+
+  test('the next paragraph starts a pause after the last one, not after its synthesis', async () => {
+    // One speak() is one paragraph. The pause between them belongs on the
+    // audio clock, so a slow synthesis eats into it instead of adding to it —
+    // that is what made paragraph pauses swing with the network (#5750).
+    parsedMarks = [{ name: '0', text: 'Only sentence.', language: 'en' }];
+    const client = await startClient();
+    await client.setRate(1);
+    client.setParagraphGap(0.3);
+
+    const { done } = collectSpeak(client, new AbortController().signal);
+    await flush();
+    await flush();
+    const first = ctx().sources[0]!;
+    await ctx().advanceTo(1.03); // starts at 0.03, 1s long
+    await done;
+
+    const { done: nextDone } = collectSpeak(client, new AbortController().signal);
+    await flush();
+    await flush();
+    const second = ctx().sources[1]!;
+    expect(second.startedAt! - first.endTime).toBeCloseTo(0.3, 5);
+
+    await ctx().advanceTo(5);
+    await nextDone;
+  });
+
+  test('setSentenceGap before speaking changes the observed gap', async () => {
+    const client = await startClient();
+    await client.setRate(1);
+    client.setSentenceGap(0.4); // gap = 0.4 / 1
+    const { done } = collectSpeak(client, new AbortController().signal);
+    await flush();
+    await flush();
+    const [first, second] = ctx().sources;
+    expect(second!.startedAt! - first!.endTime).toBeCloseTo(0.4, 5);
+    await ctx().advanceTo(5);
+    await done;
+  });
+
+  test('setSentenceGap mid-session affects the next scheduled gap', async () => {
+    parsedMarks = [
+      { name: '0', text: 'First sentence.', language: 'en' },
+      { name: '1', text: 'Second sentence.', language: 'en' },
+      { name: '2', text: 'Third sentence.', language: 'en' },
+      { name: '3', text: 'Fourth sentence.', language: 'en' },
+    ];
+    const client = await startClient();
+    await client.setRate(1);
+    const { done } = collectSpeak(client, new AbortController().signal);
+    // Initial scheduling of chunks
+    await flush();
+    await flush();
+    let sources = ctx().sources;
+    const [first, second] = sources;
+    expect(second!.startedAt! - first!.endTime).toBeCloseTo(0.15, 5);
+
+    // Change gap mid-session
+    client.setSentenceGap(0.3);
+
+    // Advance playback to trigger chunk 0's onended and free scheduling capacity
+    // for chunk 2 to be scheduled. Then advance more to free chunk 1 so chunk 3 is scheduled.
+    await ctx().advanceTo(1.1);
+    await flush();
+
+    // Chunk 2 should now be scheduled with the old gap (from chunk 1's timing)
+    sources = ctx().sources;
+    expect(sources.length).toBeGreaterThanOrEqual(3);
+
+    // Advance further to free chunk 2, allowing chunk 3 to be scheduled with the new gap
+    await ctx().advanceTo(3.4);
+    await flush();
+
+    sources = ctx().sources;
+    expect(sources.length).toBeGreaterThanOrEqual(4);
+
+    // Chunk 2 is the first chunk scheduled after setSentenceGap, so the gap
+    // preceding chunk 3 (chunk 2's schedule-time gap) reflects the new value.
+    const [, , thirdChunk, fourthChunk] = sources;
+    expect(fourthChunk!.startedAt! - thirdChunk!.endTime).toBeCloseTo(0.3, 5);
+
     await ctx().advanceTo(5);
     await done;
   });
@@ -268,12 +376,25 @@ describe('EdgeTTSClient Web Audio playback', () => {
     expect(codes).not.toContain('boundary');
   });
 
-  test('a hard fetch error yields error and terminates', async () => {
+  test('a sustained run of hard fetch errors terminates the session (bounded skip)', async () => {
+    // A non-permanent (network) error skips the sentence so cached neighbours
+    // can still play — a cached chapter whose heading is uncached must not stop
+    // on the heading. But a RUN of consecutive unreachable sentences, with no
+    // cached hit to reset the budget, stops instead of skipping to the end of
+    // the book. Enough failing marks to exceed the budget, so the session ends
+    // with 'error' rather than wedging in 'playing'.
+    parsedMarks = Array.from({ length: 6 }, (_, i) => ({
+      name: String(i),
+      text: `Sentence ${i}.`,
+      language: 'en',
+    }));
     createAudioDataBehavior = async () => {
       throw new Error('network exploded');
     };
     const client = await startClient();
+    vi.useFakeTimers();
     const { events, done } = collectSpeak(client, new AbortController().signal);
+    await vi.runAllTimersAsync();
     await done;
     expect(events.at(-1)).toMatchObject({ code: 'error', message: 'network exploded' });
   }, 10000);

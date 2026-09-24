@@ -77,21 +77,46 @@ pub fn android_version_from_uname(release: &str) -> Option<String> {
 }
 
 /// Known-benign browser errors that are expected behavior, not app bugs, and
-/// only add noise to crash reporting: the View Transition API skips a transition
-/// when the tab is hidden or the navigation is superseded, and aborts it when the
-/// document is in an invalid state. These arrive as unhandled rejections while
-/// the navigation itself still completes. Matched (case-insensitively) on the
-/// exception value so they are dropped in `before_send`. NOTE: a transition
-/// *timeout* abort is deliberately NOT ignored — a slow DOM update can signal a
-/// real performance problem.
+/// only add noise to crash reporting:
+/// - The View Transition API skips a transition when the tab is hidden or the
+///   navigation is superseded, aborts it when the document is in an invalid
+///   state, and times out when the DOM update overruns its ~4s budget (e.g. a
+///   large library grid render on a slow device). All arrive as unhandled
+///   rejections while the navigation itself still completes without the
+///   animation, so none is an app bug (READEST-7 / READEST-F / READEST-G /
+///   READEST-9). The timeout was previously kept for its perf signal, but on
+///   supported engines it is just a slow render and only added backlog noise.
+/// - "ResizeObserver loop limit exceeded" / "ResizeObserver loop completed with
+///   undelivered notifications" is a benign notice the browser fires when
+///   observer callbacks don't settle within one frame; the spec defines it as
+///   safe to ignore and layout still converges (READEST-R / READEST-1Y /
+///   READEST-26).
+///
+/// Matched (case-insensitively) on the exception value so they are dropped in
+/// `before_send`.
 pub fn is_ignored_browser_error(value: &str) -> bool {
     let value = value.to_lowercase();
     value.contains("transition was skipped")
         || value.contains("transition was aborted because of invalid state")
+        || value.contains("aborted because of timeout in dom update")
+        || value.contains("resizeobserver loop")
 }
 
-/// The WebView (engine, major-version), set once at startup when the app reports
-/// its User-Agent. Stored globally so `before_send` can tag every event — the
+/// Identifies a stack-frame function belonging to the MOBI cover extraction
+/// path. The third-party `mobi` crate panics on a corrupt cover record
+/// (an inverted slice range) when importing a truncated file (READEST-1Q /
+/// READEST-10). `mobi_parser::extract_cover` contains that panic with
+/// `catch_unwind` so the import still succeeds, but Sentry's panic hook reports
+/// it regardless; `before_send` drops events whose stack hits this frame so the
+/// contained panic stops adding noise. Matched on our own module path (not the
+/// generic slice-index message) so unrelated slice panics are still reported.
+pub fn is_mobi_cover_panic_frame(function: &str) -> bool {
+    function.contains("mobi_parser::extract_cover")
+}
+
+/// The WebView engine + version, set once at startup — the version prefers the
+/// runtime's own query and falls back to the major parsed from the User-Agent.
+/// Stored globally so `before_send` can tag every event — the
 /// browser context integration doesn't run for events forwarded from the webview.
 static WEBVIEW_INFO: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
 
@@ -151,8 +176,48 @@ pub extern "C" fn readest_sentry_dsn() -> *const std::os::raw::c_char {
 mod tests {
     use super::{
         android_version_from_uname, corrected_os_name, dsn_from_env, environment_for_version,
-        is_ignored_browser_error, parse_webview_info, release_name,
+        is_ignored_browser_error, is_mobi_cover_panic_frame, parse_webview_info, release_name,
     };
+
+    /// `tauri-plugin-sentry`'s `minidump` feature pulls in sentry-rust-minidump ->
+    /// minidumper-child -> crash-handler, and it starts its crash-reporter server
+    /// by re-exec'ing our own main executable with `--crash-reporter-server`. That
+    /// one behavior broke the app at launch three times: the re-exec'd process
+    /// booted a whole second copy of the app whenever its server failed to start
+    /// (#5052), a sandboxed App Store build can never re-exec itself so it aborted
+    /// in dyld before `main()` (#5053), and crash-handler's `pthread_create`
+    /// interposer panics on 32-bit ARM, aborting every armeabi-v7a device (#5070).
+    /// It bought ~49 native crash events a month, nearly all unsymbolicated WebView
+    /// frames. Sentry still reports Rust panics, WebView errors and native mobile
+    /// crashes without it, so the feature stays off on every target. Bringing native
+    /// desktop dumps back means shipping a *separate* helper binary, never a re-exec
+    /// of our own.
+    #[test]
+    fn minidump_feature_is_enabled_on_no_target() {
+        let manifest = include_str!("../Cargo.toml");
+        let deps: Vec<&str> = manifest
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("tauri-plugin-sentry"))
+            .collect();
+
+        assert!(
+            !deps.is_empty(),
+            "tauri-plugin-sentry must be declared in Cargo.toml"
+        );
+        for dep in deps {
+            assert!(
+                dep.contains("default-features = false"),
+                "tauri-plugin-sentry must set default-features = false: its default \
+                 feature set is [\"minidump\"] (#5052/#5053/#5070); found: {dep}"
+            );
+            assert!(
+                !dep.contains("minidump"),
+                "the minidump feature must stay off on every target \
+                 (#5052/#5053/#5070); found: {dep}"
+            );
+        }
+    }
 
     #[test]
     fn dsn_is_none_when_unset_or_blank() {
@@ -234,14 +299,47 @@ mod tests {
         assert!(is_ignored_browser_error(
             "InvalidStateError: Transition was aborted because of invalid state"
         ));
+        // Timed out because a slow DOM update overran the budget (READEST-9).
+        assert!(is_ignored_browser_error(
+            "TimeoutError: Transition was aborted because of timeout in DOM update"
+        ));
     }
 
     #[test]
-    fn keeps_view_transition_timeout_and_real_errors() {
-        // A transition timeout can signal a real perf problem — do NOT suppress it.
-        assert!(!is_ignored_browser_error(
-            "TimeoutError: Transition was aborted because of timeout in DOM update"
+    fn matches_mobi_cover_panic_frame() {
+        assert!(is_mobi_cover_panic_frame(
+            "readestlib::mobi_parser::extract_cover"
         ));
+        // After catch_unwind the panicking frame is the inner fn.
+        assert!(is_mobi_cover_panic_frame(
+            "readestlib::mobi_parser::extract_cover_inner"
+        ));
+    }
+
+    #[test]
+    fn keeps_unrelated_panic_frames() {
+        assert!(!is_mobi_cover_panic_frame(
+            "readestlib::epub_parser::extract_epub_cover_full"
+        ));
+        assert!(!is_mobi_cover_panic_frame(
+            "core::slice::index::slice_index_fail"
+        ));
+        assert!(!is_mobi_cover_panic_frame(""));
+    }
+
+    #[test]
+    fn ignores_resize_observer_loop_noise() {
+        // Both browser phrasings are benign (READEST-R / READEST-1Y / READEST-26).
+        assert!(is_ignored_browser_error(
+            "ResizeObserver loop limit exceeded"
+        ));
+        assert!(is_ignored_browser_error(
+            "Error: ResizeObserver loop completed with undelivered notifications."
+        ));
+    }
+
+    #[test]
+    fn keeps_real_errors() {
         assert!(!is_ignored_browser_error("TypeError: Load failed"));
         assert!(!is_ignored_browser_error("concurrent use forbidden"));
         assert!(!is_ignored_browser_error(""));

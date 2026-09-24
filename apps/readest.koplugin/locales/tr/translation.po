@@ -17,6 +17,36 @@ msgstr "Readest"
 msgid "Keeps your KOReader and Readest devices in sync."
 msgstr "KOReader ve Readest cihazlarınızı senkronize tutar."
 
+msgid "Downloading %1 of %2…"
+msgstr "%2 kitaptan %1. indiriliyor…"
+
+msgid "%1 MB downloaded"
+msgstr "%1 MB indirildi"
+
+msgid "No downloads in progress."
+msgstr "Devam eden indirme yok."
+
+msgid "Run in background"
+msgstr "Arka planda çalıştır"
+
+msgid "Cancel download"
+msgstr "İndirmeyi iptal et"
+
+msgid "Download cancelled. %1 of %2 downloaded."
+msgstr "İndirme iptal edildi. %2 kitaptan %1 tanesi indirildi."
+
+msgid "Downloaded %1 of %2 (skipped %3)."
+msgstr "%2 kitaptan %1 tanesi indirildi (%3 tanesi atlandı)."
+
+msgid "Downloaded %1 of %2."
+msgstr "%2 kitaptan %1 tanesi indirildi."
+
+msgid "Set Home folder in File Manager first to enable downloads."
+msgstr "İndirmeleri etkinleştirmek için önce Dosya Yöneticisi'nde Ana klasörü ayarlayın."
+
+msgid "No books to download."
+msgstr "İndirilecek kitap yok."
+
 msgid "Library view"
 msgstr "Kütüphane görünümü"
 
@@ -68,8 +98,14 @@ msgstr "Artan"
 msgid "Actions"
 msgstr "İşlemler"
 
+msgid "Sync now"
+msgstr "Şimdi eşitle"
+
 msgid "Download all books"
 msgstr "Tüm kitapları indir"
+
+msgid "Download progress"
+msgstr "İndirme ilerlemesi"
 
 msgid "Rescan library"
 msgstr "Kütüphaneyi yeniden tara"
@@ -104,6 +140,12 @@ msgstr "Kütüphanede ara"
 msgid "Search title or author"
 msgstr "Başlık veya yazar ara"
 
+msgid "Books synced"
+msgstr "Kitaplar senkronize edildi"
+
+msgid "Books sync failed"
+msgstr "Kitap senkronizasyonu başarısız"
+
 msgid "Cover Browser plugin required for full Library rendering. Falling back to plain list."
 msgstr "Tam kütüphane görünümü için Cover Browser eklentisi gerekli. Düz listeye geri dönülüyor."
 
@@ -116,18 +158,6 @@ msgstr "Bu kitabı Readest'ten indirelim mi?"
 msgid "Download"
 msgstr "İndir"
 
-msgid "Set Home folder in File Manager first to enable downloads."
-msgstr "İndirmeleri etkinleştirmek için önce Dosya Yöneticisi'nde Ana klasörü ayarlayın."
-
-msgid "Downloading…"
-msgstr "İndiriliyor…"
-
-msgid "Cloud copy unavailable."
-msgstr "Bulut kopyası kullanılamıyor."
-
-msgid "Download failed."
-msgstr "İndirme başarısız."
-
 msgid "No cover available on Readest."
 msgstr "Readest'te kapak bulunamadı."
 
@@ -137,20 +167,8 @@ msgstr "Kapak indirilemedi."
 msgid "Could not delete the file."
 msgstr "Dosya silinemedi."
 
-msgid "No books to download."
-msgstr "İndirilecek kitap yok."
-
-msgid "Downloading %1 of %2…"
-msgstr "%2 kitaptan %1. indiriliyor…"
-
-msgid "Download cancelled. %1 of %2 downloaded."
-msgstr "İndirme iptal edildi. %2 kitaptan %1 tanesi indirildi."
-
-msgid "Downloaded %1 of %2 (skipped %3)."
-msgstr "%2 kitaptan %1 tanesi indirildi (%3 tanesi atlandı)."
-
-msgid "Downloaded %1 of %2."
-msgstr "%2 kitaptan %1 tanesi indirildi."
+msgid "Download group"
+msgstr "Grubu indir"
 
 msgid "Removing from cloud…"
 msgstr "Buluttan kaldırılıyor…"
@@ -190,6 +208,9 @@ msgstr "Depolama kotası aşıldı."
 
 msgid "Upload failed."
 msgstr "Yükleme başarısız."
+
+msgid "Send to nearby Readest devices"
+msgstr "Yakındaki Readest cihazlarına gönder"
 
 msgid "Download Book"
 msgstr "Kitabı indir"
@@ -233,8 +254,11 @@ msgstr "Bu cihazdan Readest açıklamalarını gönder"
 msgid "Pull readest annotations from other devices"
 msgstr "Diğer cihazlardan Readest açıklamalarını al"
 
-msgid "Add to Readest"
-msgstr "Readest'e ekle"
+msgid "Full sync all readest annotations"
+msgstr "Tüm Readest açıklamalarını tam senkronize et"
+
+msgid "Add to Readest library"
+msgstr "Readest kitaplığına ekle"
 
 msgid "Sign in to Readest first."
 msgstr "Önce Readest'e giriş yapın."
@@ -257,6 +281,12 @@ msgstr "Zaten Readest kütüphanenizde:"
 msgid "Added to Readest:"
 msgstr "Readest'e eklendi:"
 
+msgid "No book is open"
+msgstr "Açık kitap yok"
+
+msgid "Uploaded to Readest:"
+msgstr "Readest'e yüklendi:"
+
 msgid "Log in Readest Account"
 msgstr "Readest hesabına giriş yap"
 
@@ -275,17 +305,14 @@ msgstr "İstatistikleri şimdi gönder"
 msgid "Pull stats now"
 msgstr "İstatistikleri şimdi al"
 
-msgid "Push books now"
-msgstr "Kitapları şimdi gönder"
-
-msgid "Pull books now"
-msgstr "Kitapları şimdi al"
-
 msgid "Push reading progress now"
 msgstr "Okuma ilerlemesini şimdi gönder"
 
 msgid "Pull reading progress now"
 msgstr "Okuma ilerlemesini şimdi al"
+
+msgid "Upload current book to Readest"
+msgstr "Geçerli kitabı Readest'e yükle"
 
 msgid "Push annotations now"
 msgstr "Açıklamaları şimdi gönder"
@@ -299,6 +326,9 @@ msgstr "Tüm açıklamaları tam senkronize et"
 msgid "Sync info"
 msgstr "Senkronizasyon bilgisi"
 
+msgid "Receive via Nearby BookDrop"
+msgstr "Nearby BookDrop ile al"
+
 msgid "Check for update (v%1)"
 msgstr "Güncelleme kontrol et (v%1)"
 
@@ -310,9 +340,6 @@ msgstr "Önce giriş yapın"
 
 msgid "Please configure Readest settings first"
 msgstr "Önce Readest ayarlarını yapılandırın"
-
-msgid "No book is open"
-msgstr "Açık kitap yok"
 
 msgid "(none)"
 msgstr "(yok)"
@@ -335,11 +362,89 @@ msgstr "Senkronizasyon bilgisi"
 msgid "Library not initialized"
 msgstr "Kütüphane başlatılmadı"
 
-msgid "Books synced"
-msgstr "Kitaplar senkronize edildi"
+msgid "Set a Readest download folder or a KOReader home folder first."
+msgstr "Önce bir Readest indirme klasörü veya bir KOReader ana klasörü ayarlayın."
 
-msgid "Books sync failed"
-msgstr "Kitap senkronizasyonu başarısız"
+msgid "Nearby BookDrop error: could not find a free port."
+msgstr "Nearby BookDrop hatası: boş bağlantı noktası bulunamadı."
+
+msgid "Nearby BookDrop failed to start."
+msgstr "Nearby BookDrop başlatılamadı."
+
+msgid "Starting Nearby BookDrop…"
+msgstr "Nearby BookDrop başlatılıyor…"
+
+msgid "Nearby BookDrop will start when Wi-Fi connects."
+msgstr "Wi-Fi bağlandığında Nearby BookDrop başlayacak."
+
+msgid "… and %1 more"
+msgstr "… ve %1 tane daha"
+
+msgid "%1 wants to send you %2 file(s) (%3):"
+msgstr "%1, size %2 dosya göndermek istiyor (%3):"
+
+msgid "Accept"
+msgstr "Kabul et"
+
+msgid "Decline"
+msgstr "Reddet"
+
+msgid "Receiving %1 file(s) from %2…"
+msgstr "%2 kaynağından %1 dosya alınıyor…"
+
+msgid "Nearby BookDrop: received %1 file(s), %2 failed."
+msgstr "Nearby BookDrop: %1 dosya alındı, %2 başarısız."
+
+msgid "Nearby BookDrop transfer cancelled."
+msgstr "Nearby BookDrop aktarımı iptal edildi."
+
+msgid "Nearby BookDrop: received %1 file(s)."
+msgstr "Nearby BookDrop: %1 dosya alındı."
+
+msgid "Nearby BookDrop not available on this device"
+msgstr "Nearby BookDrop bu cihazda kullanılamıyor"
+
+msgid "Scanning for nearby devices…"
+msgstr "Yakındaki cihazlar aranıyor…"
+
+msgid "No nearby devices found. Make sure the other device has Nearby BookDrop or LocalSend open."
+msgstr "Yakında cihaz bulunamadı. Diğer cihazda Nearby BookDrop veya LocalSend'in açık olduğundan emin olun."
+
+msgid "Rescan"
+msgstr "Yeniden tara"
+
+msgid "Send to…"
+msgstr "Şuraya gönder…"
+
+msgid "Sending…"
+msgstr "Gönderiliyor…"
+
+msgid "Sending… %1%"
+msgstr "Gönderiliyor… %1%"
+
+msgid "Sent %1 file(s)."
+msgstr "%1 dosya gönderildi."
+
+msgid "The other device declined the transfer."
+msgstr "Diğer cihaz aktarımı reddetti."
+
+msgid "Transfer cancelled."
+msgstr "Aktarım iptal edildi."
+
+msgid "Send failed: %1"
+msgstr "Gönderme başarısız: %1"
+
+msgid "Nearby BookDrop error: %1"
+msgstr "Nearby BookDrop hatası: %1"
+
+msgid "Nearby BookDrop off"
+msgstr "Nearby BookDrop kapalı"
+
+msgid "Visible as %1"
+msgstr "%1 olarak görünür"
+
+msgid "(limited discovery)"
+msgstr "(sınırlı keşif)"
 
 msgid "Checking for update…"
 msgstr "Güncelleme kontrol ediliyor…"

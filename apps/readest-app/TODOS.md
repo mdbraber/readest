@@ -1,5 +1,19 @@
 # TODOS
 
+## Notebook editor follow-ups
+
+### Verify near-limit editing on Android API 26
+
+**What:** Run the Notebook document's 10 KiB and 256 KiB input, recovery, and serialization benchmark on an Android API 26 emulator using the minimum-supported System WebView profile.
+
+**Why:** The issue 5917 implementation intentionally uses a real-Chromium performance gate, which does not prove that near-limit typing meets the same latency budget on Readest's oldest supported Android runtime.
+
+**Context:** The browser gate requires 50 operations with p95 below 16 ms at 10 KiB and below 50 ms at 256 KiB, with no operation above 100 ms. Reuse that workload on API 26 and move recovery storage away from synchronous `localStorage` if the device profile misses the budget.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** Issue 5917 Notebook editor implementation
+
 ## Cloud Sync provider selection follow-ups (deferred by /autoplan, 2026-07-06)
 
 Deferred from the Cloud Sync provider-selection plan (#4959/#4380). See the
@@ -33,24 +47,48 @@ Each was explicitly deferred, not forgotten — see the Decision Audit Trail in
 
 - [ ] Cross-section gapless playback: preload and schedule the next section's first
       sentence so chapter boundaries are as seamless as sentence boundaries. (M)
-- [ ] Buffer-ahead indicator in the TTS scrubber (show the prefetched region,
-      YouTube-style). (S)
 - [ ] Lock-screen ±10s seek offsets in addition to prev/next sentence. (S)
 - [ ] Persist measured sentence durations per book so a reopened chapter starts
       with an exact timeline instead of estimates. (S)
 - [ ] Worker offload for decode + WSOLA if device profiling shows main-thread jank
       on low-end Android. (S)
-- [ ] Sticky TTSBar scrubber (panel + lock screen only in the first release;
-      recorded as deliberate in decision #24). (S)
 - [ ] Provider-agnostic voice source hedge: local neural TTS (e.g. Piper/Kokoro
       WASM) plugging into WebAudioPlayer/SectionTimeline — the engine is designed
       for this; see "Strategic framing" in the plan. (L)
 - [ ] Background chapter prefetch (convert timeline estimates to exact durations
       ahead of playback). (M)
-- [ ] Background TTS: decouple session ownership from the reader view via an
-      app-level TTSSessionManager so closing the book keeps TTS playing
-      (headless text supply via section.createDocument(), CFI re-anchoring for
-      highlights on reattach, library now-playing pill). Decided matrix: close
-      book = keep playing; reopen same book = seamless reattach (adopt session,
-      redispatchPosition, lazy doc swap at next section); open a DIFFERENT
-      book = TTS stops; explicit stop / sleep timer = stops. (M)
+
+## Self-hosted premium TTS follow-ups (deferred by /autoplan, 2026-07-08)
+
+Deferred from the Readest Voice plans (spec: docs/superpowers/specs/2026-07-08-selfhosted-premium-tts-design.md).
+See the Decision Audit Trail in .agents/plans/2026-07-08-readest-tts-integration.md.
+
+- [ ] Dict-popup premium pronunciation: route the dictionary speak button through
+      /api/tts/readest for eligible plans (reuses the wire contract as-is). (M)
+- [ ] Voice preview samples in the TTS voice picker (pre-generated clips per voice,
+      static hosting; no GPU call on tap). (M)
+- [ ] Qwen3 instruct-based emotion/style control as a Pro setting (API already
+      supports `instruct`; needs UX + catalog plumbing). (M)
+- [ ] Warm-worker peak-hours schedule (RunPod min-workers=1 on a cron) if cold-start
+      complaints materialize; premise-4 mitigation. (S)
+- [ ] Client-side cold-start abandonment telemetry (did the user give up before
+      first audio?) to complete the day-60 review data. (S)
+- [ ] Comparative MOS-style voice regression harness vs Edge/native/managed APIs
+      (post-demand; the launch gate is a one-shot A/B listen). (M)
+- [ ] On-device Kokoro exploration for offline premium voices (desktop first; 82M
+      params runs near-realtime on CPU) — if accepted as taste decision, this moves
+      into a phase-2 plan instead. (L)
+- [ ] Cancel in-flight RunPod jobs on client abort: forward AbortSignal through
+      the route and call /cancel/{id} so a stop during a cold start does not
+      burn a full GPU job. V1 keeps signal-less fetches deliberately (in-flight
+      dedup shares one promise across preload and playback, Edge parity). (S)
+- [ ] Extend the TTS browser e2e harness with a mocked /api/tts/readest so the
+      premium engine's playback + highlight path gets automated coverage. (M)
+- [ ] Per-user in-flight request cap (1-2) on /api/tts/readest to complement the
+      char quota (needs shared state on Workers: KV or DO). (M)
+- [ ] Delegate uncovered-language marks to Edge TTS instead of skipping them
+      (cross-engine per-sentence delegation; v1 skips the sentence). (M)
+- [ ] End-to-end request id: client generates one per sentence, route forwards it
+      in the RunPod input, worker logs it — full-path correlation in one grep. (S)
+- [ ] Generate the shared voice catalog (voices.json + catalogVersion) from
+      readestVoices.ts instead of hand-syncing the worker fixture. (S)

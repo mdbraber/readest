@@ -2,7 +2,7 @@
 //
 // The lock screen is the primary surface for background TTS: metadata,
 // position state, and transport handlers must keep working after the reader
-// (and its hooks) unmount. This bridge binds to a TTSController directly —
+// (and its hooks) unmount. This bridge binds to a PlaybackSource directly —
 // its listeners ride controller events, not React lifecycles — and is the
 // SOLE owner of media-session handlers from the moment a session starts.
 //
@@ -14,8 +14,11 @@
 import { buildTTSMediaMetadata } from '@/utils/ttsMetadata';
 import { fetchImageAsBase64 } from '@/utils/image';
 import { getMediaSession, TauriMediaSession } from '@/libs/mediaSession';
+import { isTauriAppPlatform } from '@/services/environment';
+import { getOSPlatform } from '@/utils/misc';
+import { notifyCarPlayState } from './carPlaySession';
 import { SILENCE_DATA } from './TTSData';
-import type { TTSController } from './TTSController';
+import type { PlaybackSource } from '@/services/playback/playbackSource';
 import type { TTSMark, TTSMediaMetadataMode } from './types';
 
 export interface TTSMediaBridgeMeta {
@@ -24,6 +27,11 @@ export interface TTSMediaBridgeMeta {
   author: string;
   coverImageUrl: string | null;
   metadataMode: TTSMediaMetadataMode;
+  // False when this session's audio plays through a WebView media element, so
+  // the native media session leaves audio focus alone — see
+  // MediaSessionState.ownsAudioFocus. Defaults to true: TTS (WebAudio or the
+  // platform engine) and native narration render outside the WebView.
+  ownsAudioFocus?: boolean;
   // Live section label while the reader is mounted; returns undefined when
   // the supplying hook is dead (headless) — the bridge then keeps the last
   // known label rather than freezing on a stale store read.
@@ -37,6 +45,15 @@ let unblockerAudio: HTMLAudioElement | null = null;
 
 // This enables WebAudio to play even when the mute toggle switch is ON.
 export const unblockAudio = (): void => {
+  // iOS Tauri: never create the element. TTS audio plays NATIVELY there
+  // (NativeAudioPlayer -> app-process AVPlayer; AVSpeechSynthesizer for
+  // system voices), so the app's own .playback session provides Now Playing
+  // and mute-switch immunity, and WebKit must be kept OUT of the media
+  // picture: a playing HTMLMediaElement (or a WebAudio page declared
+  // 'playback' via navigator.audioSession) makes WebKit register its own
+  // now-playing client — a bare "localhost" card with dead buttons that
+  // fights the native session.
+  if (getOSPlatform() === 'ios' && isTauriAppPlatform()) return;
   if (unblockerAudio) return;
   unblockerAudio = document.createElement('audio');
   unblockerAudio.setAttribute('x-webkit-airplay', 'deny');
@@ -80,12 +97,34 @@ type BridgeMediaSession = TauriMediaSession | MediaSession;
 export class TTSMediaBridge {
   #resolveMediaSession: () => BridgeMediaSession | null;
   #mediaSession: BridgeMediaSession | null = null;
-  #controller: TTSController | null = null;
+  #controller: PlaybackSource | null = null;
   #meta: TTSMediaBridgeMeta | null = null;
+  // Cover fetched once per bind as a data URL. iOS navigator.mediaSession only
+  // renders lock-screen / CarPlay artwork from a fetchable URL, and the book
+  // cover is often a blob/tauri URL the media session can't load; a data URL
+  // always resolves. The web path re-sends it on every update (each is a full
+  // replace); the native path pushes it once — see #pushArtwork.
+  #coverArtwork = '/icon.png';
+  // Push artwork on the first native metadata write after a bind. Later mark
+  // updates omit it: Swift merges into the existing nowPlayingInfo, so the
+  // cover survives, and re-decoding a multi-MB base64 image per sentence does
+  // not. Sending artwork: '' instead is what used to wipe the cover — empty
+  // string is truthy for the WebKit mirror and non-nil for Swift's optional.
+  #pushArtwork = true;
+  #bindingId = 0;
   #lastSectionLabel: string | undefined;
   #previousSectionLabel: string | undefined;
   #onSpeakMark: ((e: Event) => void) | null = null;
   #onStateChange: ((e: Event) => void) | null = null;
+  // A nexttrack/previoustrack from the car (or lock screen) makes the
+  // controller stop() then advance a paragraph — a ~1s round trip. While it
+  // is in flight the controller churns (stop -> transient paused, timeline
+  // reset), which otherwise reaches the car as a pause flicker / progress
+  // reset with no track change: "the forward button does not work". #skipping
+  // holds an optimistic playing state and swallows that churn until the next
+  // segment's mark lands (or a safety timeout fires).
+  #skipping = false;
+  #skipTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(resolveMediaSession: () => BridgeMediaSession | null = getMediaSession) {
     this.#resolveMediaSession = resolveMediaSession;
@@ -95,7 +134,7 @@ export class TTSMediaBridge {
     return this.#controller !== null;
   }
 
-  async bind(controller: TTSController, meta: TTSMediaBridgeMeta): Promise<void> {
+  async bind(controller: PlaybackSource, meta: TTSMediaBridgeMeta): Promise<void> {
     if (this.#controller === controller) {
       // Re-bind on adopt: refresh the meta (new bookKey / live label source)
       // without re-registering listeners or re-activating the session.
@@ -103,46 +142,92 @@ export class TTSMediaBridge {
       return;
     }
     this.unbind();
+    const bindingId = ++this.#bindingId;
     this.#controller = controller;
     this.#meta = meta;
     this.#mediaSession = this.#resolveMediaSession();
     if (!this.#mediaSession) return;
+    // bind() awaits below (cover fetch, setActive), during which a concurrent
+    // unbind() (e.g. a stop during startup) nulls #mediaSession. Use the
+    // captured session for the awaited calls so they can't deref null, then
+    // bail before wiring handlers onto a torn-down session (READEST-1A).
+    const mediaSession = this.#mediaSession;
+    // Install directional handlers before any native activation await. Cold
+    // Android Auto speech may already be audible while the WebView takes over;
+    // without handlers in this window the first Pause updates the car icon but
+    // leaves the controller speaking.
+    this.#registerActionHandlers();
 
-    if (this.#mediaSession instanceof TauriMediaSession) {
-      let artwork = '/icon.png';
-      try {
-        artwork = await fetchImageAsBase64(meta.coverImageUrl || '/icon.png');
-      } catch {
-        try {
-          artwork = await fetchImageAsBase64('/icon.png');
-        } catch {
-          artwork = '';
-        }
-      }
-      await this.#mediaSession.setActive({ active: true });
-      await this.#mediaSession.updateMetadata({
+    if (mediaSession instanceof TauriMediaSession) {
+      // Foreground ownership is the startup-critical path. Artwork conversion
+      // can be slow and must never delay Android's active media service.
+      await mediaSession.setActive({
+        active: true,
+        sessionId: meta.bookKey,
+        ownsAudioFocus: meta.ownsAudioFocus ?? true,
+        foregroundServiceTitle: meta.title,
+        foregroundServiceText: meta.author,
+        // bookKey is `${hash}-${uniqueId()}`; the hash alone addresses the book
+        // for a readest://book/{hash} resume deep link from the car.
+        bookHash: meta.bookKey.split('-')[0],
+        bookTitle: meta.title,
+        bookAuthor: meta.author,
+      });
+      if (this.#bindingId !== bindingId || this.#mediaSession !== mediaSession) return;
+      await mediaSession.updateMetadata({
         title: meta.title,
         artist: meta.author,
         album: meta.title,
-        artwork,
       });
     }
 
-    this.#registerActionHandlers();
+    if (this.#bindingId !== bindingId || this.#mediaSession !== mediaSession) return;
+
+    // Mirror the session onto CarPlay (iOS only; no-op elsewhere).
+    void notifyCarPlayState({ active: true, title: meta.title, author: meta.author });
 
     this.#onSpeakMark = (e: Event) => {
       const mark = (e as CustomEvent<TTSMark>).detail;
+      // Only end the hold once the skipped-to segment is actually playing. A
+      // stray mark from the aborted segment (stop() during forward/backward)
+      // would otherwise clear the hold early and let the position push below
+      // surface a paused/stale state — the residual backward flicker.
+      if (this.#controller?.state === 'playing') this.#endSkip();
       void this.#updateMetadata(mark);
       void this.#updatePositionState();
     };
     this.#onStateChange = () => {
       void this.#updatePlaybackState();
+      // Pause/resume must also refresh the timeline. The scrubber's playbackRate
+      // and frozen position only change on state transitions, not on marks — the
+      // media session updated solely on tts-speak-mark, so a mid-sentence pause
+      // never reached the car/lock screen (stale play icon, a timeline that kept
+      // running). This pushes the paused rate/position immediately.
+      // Transit 'stopped' (every paragraph advance) must NOT push: it reads a
+      // non-playing state and its rate-0 write races the follow-up 'playing'
+      // write — landing last, it left CarPlay showing paused with a frozen
+      // clock while audio kept playing.
+      const ctrl = this.#controller;
+      if (ctrl && !(ctrl.state === 'stopped' && !ctrl.terminated)) {
+        void this.#updatePositionState();
+      }
     };
     controller.addEventListener('tts-speak-mark', this.#onSpeakMark);
     controller.addEventListener('tts-state-change', this.#onStateChange);
+
+    void this.#loadArtwork(mediaSession, meta, bindingId);
+    // Activation and listener registration both await native work. An
+    // audiobook can begin playing during that window, before either event
+    // listener exists. Reconcile the live controller once so Android Auto is
+    // never left stopped over audio that is already playing.
+    if (mediaSession instanceof TauriMediaSession) {
+      void this.#updatePlaybackState();
+      void this.#updatePositionState();
+    }
   }
 
   unbind(): void {
+    ++this.#bindingId;
     if (this.#controller) {
       if (this.#onSpeakMark) {
         this.#controller.removeEventListener('tts-speak-mark', this.#onSpeakMark);
@@ -150,12 +235,14 @@ export class TTSMediaBridge {
       if (this.#onStateChange) {
         this.#controller.removeEventListener('tts-state-change', this.#onStateChange);
       }
+      void notifyCarPlayState({ active: false });
     }
     const mediaSession = this.#mediaSession;
     if (mediaSession) {
       for (const action of [
         'play',
         'pause',
+        'toggle',
         'stop',
         'seekforward',
         'seekbackward',
@@ -170,9 +257,10 @@ export class TTSMediaBridge {
         }
       }
       if (mediaSession instanceof TauriMediaSession) {
-        void mediaSession.setActive({ active: false });
+        void mediaSession.setActive({ active: false, sessionId: this.#meta?.bookKey });
       }
     }
+    this.#endSkip();
     this.#controller = null;
     this.#meta = null;
     this.#mediaSession = null;
@@ -180,6 +268,45 @@ export class TTSMediaBridge {
     this.#onStateChange = null;
     this.#lastSectionLabel = undefined;
     this.#previousSectionLabel = undefined;
+    this.#pushArtwork = true;
+    // Artwork loads asynchronously after bind(), so without this reset the
+    // first metadata push of the NEXT book carries the previous book's cover
+    // (and consumes #pushArtwork, so the correction never lands).
+    this.#coverArtwork = '';
+  }
+
+  async #loadArtwork(
+    mediaSession: BridgeMediaSession,
+    meta: TTSMediaBridgeMeta,
+    bindingId: number,
+  ): Promise<void> {
+    let artwork = '';
+    try {
+      artwork = await fetchImageAsBase64(meta.coverImageUrl || '/icon.png');
+    } catch {
+      try {
+        artwork = await fetchImageAsBase64('/icon.png');
+      } catch {
+        // Both the cover and the bundled fallback failed to load. Leave the
+        // artwork empty rather than inheriting whatever was there before.
+      }
+    }
+    if (this.#bindingId !== bindingId || this.#mediaSession !== mediaSession) return;
+    this.#coverArtwork = artwork;
+    if (mediaSession instanceof TauriMediaSession && artwork) {
+      await mediaSession.updateMetadata({
+        title: meta.title,
+        artist: meta.author,
+        album: meta.title,
+        artwork,
+      });
+      // unbind() + a new bind can land during the await above, and that new
+      // binding sets #pushArtwork back to true so its own cover still gets
+      // published. Clearing the flag here without rechecking would consume the
+      // NEW binding's one-shot push and leave the new book without a cover.
+      if (this.#bindingId !== bindingId || this.#mediaSession !== mediaSession) return;
+      this.#pushArtwork = false;
+    }
   }
 
   #registerActionHandlers(): void {
@@ -196,8 +323,25 @@ export class TTSMediaBridge {
         void ctrl.start();
       }
     };
-    mediaSession.setActionHandler('play', togglePlay);
-    mediaSession.setActionHandler('pause', togglePlay);
+    // 'play'/'pause' must be DIRECTIONAL, not toggles: audio-focus events
+    // reuse them (iOS interruptions / Android focus loss), and a toggle would
+    // invert them when state already matches — e.g. headphones unplugged
+    // while paused would START speaking from the phone speaker. The
+    // single-button toggle surfaces route through the separate 'toggle'
+    // action instead.
+    mediaSession.setActionHandler('play', () => {
+      const ctrl = controller();
+      if (ctrl?.state.includes('paused')) void ctrl.start();
+    });
+    mediaSession.setActionHandler('pause', () => {
+      const ctrl = controller();
+      if (ctrl?.state === 'playing') void ctrl.pause();
+    });
+    if (mediaSession instanceof TauriMediaSession) {
+      // Custom action (not in the web MediaSession vocabulary): iOS
+      // togglePlayPauseCommand (lock-screen center button, headset click).
+      mediaSession.setActionHandler('toggle', togglePlay);
+    }
     // 'stop' keeps its long-standing pause mapping; the hard stop lives in
     // the in-app surfaces (panel, now-playing bar).
     mediaSession.setActionHandler('stop', () => {
@@ -206,8 +350,14 @@ export class TTSMediaBridge {
     });
     mediaSession.setActionHandler('seekforward', () => void controller()?.forward(true));
     mediaSession.setActionHandler('seekbackward', () => void controller()?.backward(true));
-    mediaSession.setActionHandler('nexttrack', () => void controller()?.forward());
-    mediaSession.setActionHandler('previoustrack', () => void controller()?.backward());
+    mediaSession.setActionHandler('nexttrack', () => {
+      this.#beginSkip();
+      void controller()?.forward();
+    });
+    mediaSession.setActionHandler('previoustrack', () => {
+      this.#beginSkip();
+      void controller()?.backward();
+    });
     if (mediaSession instanceof TauriMediaSession) {
       mediaSession.setActionHandler('seekto', ((positionMs: number) => {
         void controller()?.seekToTime(positionMs / 1000);
@@ -247,18 +397,36 @@ export class TTSMediaBridge {
     if (!metadata.shouldUpdate) return;
 
     if (mediaSession instanceof TauriMediaSession) {
-      await mediaSession.updateMetadata({
+      // Never send artwork: '' — that wiped the cover on every speak-mark
+      // (empty string is truthy for the web mirror and for Swift's optional).
+      // Push the cover once after bind; later updates keep title/artist only.
+      const payload: {
+        title: string;
+        artist: string;
+        album: string;
+        artwork?: string;
+      } = {
         title: metadata.title,
         artist: metadata.artist,
         album: metadata.album,
-        artwork: '',
-      });
+      };
+      if (this.#pushArtwork && this.#coverArtwork) {
+        payload.artwork = this.#coverArtwork;
+        this.#pushArtwork = false;
+      }
+      await mediaSession.updateMetadata(payload);
     } else {
+      // Declare the artwork's REAL mime type: fetchImageAsBase64 emits a JPEG
+      // data URL by default, and WebKit silently drops mediaSession artwork
+      // whose declared type mismatches the data (the lock-screen cover stayed
+      // blank with a hardcoded image/png). sizes is a hint; omit rather than lie.
+      const artworkSrc = this.#coverArtwork || '/icon.png';
+      const artworkType = /^data:(image\/[a-z+]+)/.exec(artworkSrc)?.[1];
       mediaSession.metadata = new MediaMetadata({
         title: metadata.title,
         artist: metadata.artist,
         album: metadata.album,
-        artwork: [{ src: meta.coverImageUrl || '/icon.png', sizes: '512x512', type: 'image/png' }],
+        artwork: [artworkType ? { src: artworkSrc, type: artworkType } : { src: artworkSrc }],
       });
     }
   }
@@ -269,7 +437,16 @@ export class TTSMediaBridge {
     const mediaSession = this.#mediaSession;
     const ctrl = this.#controller;
     if (!mediaSession || !ctrl) return;
+    // Hold position/playing steady through a skip: a stray mark mid-transition
+    // must not push the timeline reset or a paused state to the car.
+    if (this.#skipping) return;
     await ctrl.ensureTimeline();
+    // Re-check AFTER the await: a paragraph transit ('playing' -> 'stopped' ->
+    // 'playing') that began while the timeline resolved would otherwise be
+    // read as paused and pushed as a rate-0 write — racing the follow-up
+    // 'playing' write and, landing last, freezing the car/lock-screen card in
+    // a paused state over live audio. A terminal stop still pushes (rate 0).
+    if (this.#controller !== ctrl || (ctrl.state === 'stopped' && !ctrl.terminated)) return;
     const info = ctrl.getPlaybackInfo();
     if (!info || !Number.isFinite(info.duration) || info.duration <= 0) return;
     const position = Math.min(Math.max(info.position, 0), info.duration);
@@ -281,12 +458,42 @@ export class TTSMediaBridge {
       });
     } else if ('setPositionState' in mediaSession) {
       try {
-        mediaSession.setPositionState({ duration: info.duration, position, playbackRate: 1 });
+        // playbackRate 0 while paused freezes the lock-screen / CarPlay scrubber
+        // and flips the transport glyph to "play"; 1 lets it advance in sync.
+        mediaSession.setPositionState({
+          duration: info.duration,
+          position,
+          playbackRate: ctrl.state === 'playing' ? 1 : 0,
+        });
       } catch {
         // Transiently inconsistent states reject on some engines; the next
         // mark updates again.
       }
     }
+  }
+
+  // Enter the skip hold: assert playing at the last-known position right away
+  // so the car gets instant, coherent feedback before the round trip lands.
+  #beginSkip(): void {
+    const mediaSession = this.#mediaSession;
+    this.#skipping = true;
+    if (mediaSession instanceof TauriMediaSession) {
+      void mediaSession.updatePlaybackState({ playing: true });
+    } else if (mediaSession) {
+      mediaSession.playbackState = 'playing';
+    }
+    if (this.#skipTimer) clearTimeout(this.#skipTimer);
+    // Safety net: if no mark arrives (e.g. the skip failed) stop holding so a
+    // later pause/stop can surface.
+    this.#skipTimer = setTimeout(() => this.#endSkip(), 4000);
+  }
+
+  #endSkip(): void {
+    if (this.#skipTimer) {
+      clearTimeout(this.#skipTimer);
+      this.#skipTimer = null;
+    }
+    this.#skipping = false;
   }
 
   async #updatePlaybackState(): Promise<void> {
@@ -296,6 +503,10 @@ export class TTSMediaBridge {
     // Transit 'stopped' flickers on every paragraph advance; only surface
     // playing/paused flips to the OS.
     if (ctrl.state === 'stopped' && !ctrl.terminated) return;
+    // Hold the optimistic playing state through a skip's stop/paused churn; a
+    // terminal stop (end of book) still surfaces and ends the hold.
+    if (this.#skipping && !ctrl.terminated) return;
+    if (ctrl.terminated) this.#endSkip();
     if (mediaSession instanceof TauriMediaSession) {
       await mediaSession.updatePlaybackState({ playing: ctrl.state === 'playing' });
     } else {

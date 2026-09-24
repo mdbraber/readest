@@ -7,7 +7,15 @@
  * order; each provider writes lookup output into a per-tab container.
  */
 
-export type DictionaryProviderKind = 'builtin' | 'stardict' | 'mdict' | 'dict' | 'slob' | 'web';
+export type DictionaryProviderKind =
+  | 'builtin'
+  | 'stardict'
+  | 'mdict'
+  | 'dict'
+  | 'slob'
+  | 'bgl'
+  | 'plugin'
+  | 'web';
 
 export interface DictionaryLookupContext {
   /** Source language hint, e.g. book primary language code (`en`, `zh`). */
@@ -32,6 +40,12 @@ export interface DictionaryLookupContext {
   bg?: string;
   /** Theme foreground color (e.g. `#1a1a1a`). Forwarded into shadow-scoped CSS. */
   fg?: string;
+  /**
+   * Play the entry's own pronunciation audio as soon as it renders, instead of
+   * waiting for a tap on the speaker (#6265). Only providers that ship audio
+   * inside the bundle (MDict + its companion `.mdd`) act on this.
+   */
+  autoPlayPronunciation?: boolean;
 }
 
 export type DictionaryLookupOutcome =
@@ -58,8 +72,8 @@ export interface DictionaryProvider {
  */
 export interface ImportedDictionary {
   id: string;
-  kind: 'stardict' | 'mdict' | 'dict' | 'slob';
-  /** Display name, derived from `.ifo` `bookname`, `.mdx` `Title`, slob `label`, or DICT `00databaseshort`. */
+  kind: 'stardict' | 'mdict' | 'dict' | 'slob' | 'bgl' | 'plugin';
+  /** Display name, derived from `.ifo` `bookname`, `.mdx` `Title`, slob `label`, BGL title, or DICT `00databaseshort`. */
   name: string;
   /**
    * Stable cross-device content-hash id derived from
@@ -113,6 +127,24 @@ export interface ImportedDictionary {
     index?: string;
     // Slob bundle: a single self-contained `.slob` file.
     slob?: string;
+    // Babylon bundle: a single self-contained `.bgl` file.
+    bgl?: string;
+    // Bundled dictionary-plugin source archive. Derived SQLite indexes stay
+    // device-local in the plugin control database and never sync here.
+    pluginSource?: string;
+  };
+  /** Declarative format/source metadata for a bundled dictionary plugin. */
+  plugin?: {
+    recordVersion: 1;
+    pluginId: string;
+    formatId: string;
+    sourceFormatVersion: number;
+    indexVersion: number;
+    source: {
+      filename: string;
+      byteSize: number;
+      sha256: string;
+    };
   };
   /** Source language code if known. */
   lang?: string;
@@ -178,6 +210,13 @@ export interface DictionarySettings {
    * `font-size` rules and the MDict shadow `::part(dict-content)` rule alike.
    */
   fontScale?: number;
+  /**
+   * Play a looked-up word's pronunciation automatically instead of waiting for
+   * a tap on the speaker icon (#6265). Off by default. Only dictionaries that
+   * carry their own audio (MDict bundles with a companion `.mdd`) can honour
+   * it; nothing is spoken when the entry has no recording.
+   */
+  autoPlayPronunciation?: boolean;
 }
 
 /** Stable ids for the built-in providers. */

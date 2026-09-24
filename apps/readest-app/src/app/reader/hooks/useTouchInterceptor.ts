@@ -1,7 +1,31 @@
 import { useEffect, useRef } from 'react';
 
+// Generic swipe/tap fallback shared by toolbar and click handling. Layered
+// turns may claim earlier through their edge/trajectory arena, while ambiguous
+// gestures retain this established distance before generic behavior applies.
+export const TOUCH_SWIPE_THRESHOLD_PX = 15;
+
+// Movement below this distance is still a tap. Touchend must leave these
+// gestures alone because the browser's synthesized click is the single owner
+// of center-tap toolbar toggling.
+export const TOUCH_TAP_SLOP_PX = TOUCH_SWIPE_THRESHOLD_PX;
+
+// The paginator announces layered turns only after it has actually claimed a
+// horizontal gesture. This remains the authoritative lifecycle ownership once
+// active; candidate detection only delays generic move-time toolbar changes
+// until the paginator either claims the gesture or it ends normally.
+const activeLayeredTurnGestures = new Set<string>();
+
+export const setLayeredTurnGestureActive = (bookKey: string, active: boolean) => {
+  if (active) activeLayeredTurnGestures.add(bookKey);
+  else activeLayeredTurnGestures.delete(bookKey);
+};
+
+export const isLayeredTurnGestureActive = (bookKey: string) =>
+  activeLayeredTurnGestures.has(bookKey);
+
 export interface TouchDetail {
-  phase: 'start' | 'move' | 'end';
+  phase: 'start' | 'move' | 'end' | 'cancel';
   touch: { screenX: number; screenY: number };
   touchStart: { screenX: number; screenY: number };
   deltaX: number;

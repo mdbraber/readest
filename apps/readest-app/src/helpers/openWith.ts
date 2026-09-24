@@ -21,7 +21,17 @@ const parseWindowOpenWithFiles = () => {
 
 const parseCLIOpenWithFiles = async () => {
   const { getMatches } = await import('@tauri-apps/plugin-cli');
-  const matches = await getMatches();
+  let matches;
+  try {
+    matches = await getMatches();
+  } catch (err) {
+    // getMatches() rejects when argv carries an option the file-only CLI schema
+    // does not define — as sentry-minidump's `--crash-reporter-server` relaunch
+    // used to (READEST-Y, before that handler was removed). Treat a parse failure
+    // as "no CLI files" instead of leaking an unhandled rejection.
+    console.warn('Failed to parse CLI open-with args', err);
+    return [];
+  }
   const args = matches?.args;
   const files: string[] = [];
   if (args) {

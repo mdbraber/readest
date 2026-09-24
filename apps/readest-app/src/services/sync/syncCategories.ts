@@ -24,7 +24,7 @@
  * helper applies a cascade. See `CATEGORY_DEPENDENTS` below.
  */
 import { useSettingsStore } from '@/store/settingsStore';
-import { getCloudSyncProvider } from '@/services/sync/cloudSyncProvider';
+import { isReadestCloudEnabled } from '@/services/sync/cloudSyncProvider';
 import { SYNC_CATEGORIES, type SyncCategory } from '@/types/settings';
 
 export { SYNC_CATEGORIES };
@@ -34,9 +34,13 @@ export type { SyncCategory };
  * "If <key> is enabled, every value in the array must also be enabled."
  *
  * - `dictionary` requires `settings`: dictionary's `providerOrder`,
- *   `providerEnabled`, and `webSearches` live inside the bundled
- *   settings replica. Turning settings off while dictionary is on
- *   would silently break dictionary cross-device sync.
+ *   `providerEnabled`, `webSearches`, and `fontScale` live inside the
+ *   bundled settings replica. Turning settings off while dictionary is
+ *   on would silently break dictionary cross-device sync. The reverse
+ *   is NOT a dependency: those fields ride the settings row but are
+ *   gated by the `dictionary` category, so turning Dictionaries off
+ *   keeps them local while the rest of the bundle keeps syncing
+ *   (#5465, see `SETTINGS_DICTIONARY_FIELDS`).
  *
  * Add new edges here as we ship features that span replica kinds.
  */
@@ -69,6 +73,7 @@ const toCategory = (id: string): SyncCategory | null => {
   // Legacy `useSync` calls into `pullChanges('configs', ...)` for the
   // book reading-progress data; map the plural to our singular
   // category id.
+  if (id === 'bookshelf') return 'settings';
   if (id === 'configs') return 'progress';
   if (id === 'config') return 'progress';
   if (id === 'books') return 'book';
@@ -103,13 +108,13 @@ export const isSyncCategoryLocked = (category: SyncCategory): boolean => {
 };
 
 /**
- * Book-data categories routed exclusively to the selected cloud sync
- * provider (#4380). While WebDAV/Drive is selected, the file-sync engine
- * owns these channels (library.json + per-book config.json) and the
- * native rows must not be pushed or pulled — dual-running the channels
- * is what let quota errors and split metadata happen. Account-level
- * categories (settings, stats, dictionaries, fonts, textures, OPDS
- * catalogs) have no file-based counterpart and always stay native.
+ * Book-data categories gated on the Readest Cloud switch (#4380). Providers
+ * are independently selectable (#5062): these categories ride the native
+ * channels whenever Readest Cloud is switched on, and any enabled file
+ * backend mirrors them in parallel through library.json + config.json. Only
+ * an unchecked Readest Cloud gates the native rows off. Account-level
+ * categories (settings, stats, dictionaries, fonts, textures, OPDS catalogs)
+ * have no file-based counterpart and always stay native.
  */
 const PROVIDER_GATED_CATEGORIES: ReadonlySet<SyncCategory> = new Set([
   'book',
@@ -122,7 +127,7 @@ export const isSyncCategoryEnabled = (id: string): boolean => {
   if (!category) return true; // unknown id → always-on
   if (
     PROVIDER_GATED_CATEGORIES.has(category) &&
-    getCloudSyncProvider(useSettingsStore.getState().settings) !== 'readest'
+    !isReadestCloudEnabled(useSettingsStore.getState().settings)
   ) {
     // Runtime override, deliberately not written into syncCategories:
     // the user's own toggles persist untouched and govern the native

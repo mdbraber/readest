@@ -4,6 +4,8 @@ export type NoteTemplateData = {
   title: string;
   author: string;
   exportDate: number | string;
+  /** Public cover image URL; empty/absent when no cover could be resolved. */
+  coverImageUrl?: string;
   chapters: {
     title: string;
     annotations: {
@@ -234,6 +236,34 @@ env.addFilter('blockquote', (value: string) => {
   if (!value || typeof value !== 'string') return '';
   return formatBlockQuote(value);
 });
+
+/**
+ * Builds the markdown for copying a single annotation (highlight/note) together
+ * with a deep link back to its position, ready to paste into note apps like
+ * Obsidian. Mirrors the default markdown-export layout: a block-quoted highlight,
+ * an optional bold note line, and an italic link line. Empty blocks are omitted;
+ * the link line is always present. Label strings are passed in already translated
+ * to keep this helper i18n-agnostic.
+ */
+export function buildAnnotationCopyMarkdown({
+  text,
+  note,
+  noteLabel,
+  url,
+  linkLabel,
+}: {
+  text?: string;
+  note?: string;
+  noteLabel: string;
+  url: string;
+  linkLabel: string;
+}): string {
+  const blocks: string[] = [];
+  if (text) blocks.push(formatBlockQuote(text));
+  if (note) blocks.push(`**${noteLabel}**: ${note}`);
+  blocks.push(`*[${linkLabel}](${url})*`);
+  return blocks.join('\n\n');
+}
 
 /**
  * Renders a Jinja2/Nunjucks template with the given data

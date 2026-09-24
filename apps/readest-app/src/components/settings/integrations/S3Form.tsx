@@ -9,7 +9,7 @@ import { FileSyncError } from '@/services/sync/file/provider';
 import { createS3Provider } from '@/services/sync/providers/s3/S3Provider';
 import { SectionTitle } from '../primitives';
 import FileSyncForm from './FileSyncForm';
-import { persistActiveCloudProvider } from './cloudSync';
+import { persistCloudProviderEnabled } from './cloudSync';
 
 /**
  * Translate a connection-probe failure into a user-facing string. Each branch
@@ -41,8 +41,8 @@ const formatConnectError = (_: TranslationFunc, e: unknown): string => {
  * - **Inactive**: the endpoint/bucket/credentials form (pre-filled from saved
  *   settings, so a previously-configured bucket reconnects in one click).
  *   Connect probes the bucket with one signed listing — wrong keys surface as
- *   an auth failure, a wrong bucket as not-found — then makes S3 the single
- *   active cloud provider (providers are mutually exclusive).
+ *   an auth failure, a wrong bucket as not-found — then turns S3 on. Every
+ *   other provider is left exactly as it was (#5062).
  */
 const S3Form: React.FC = () => {
   const _ = useTranslation();
@@ -85,10 +85,9 @@ const S3Form: React.FC = () => {
       return;
     }
     // Merge the connection into the s3 slice (preserving deviceId and
-    // sub-toggles), then make S3 the single active cloud provider.
-    // persistActiveCloudProvider owns activation, persistence, and the
-    // cross-window provider broadcast.
-    await persistActiveCloudProvider(envConfig, 's3', (s) => ({
+    // sub-toggles), then switch S3 on. persistCloudProviderEnabled owns
+    // activation, persistence, and the cross-window provider broadcast.
+    await persistCloudProviderEnabled(envConfig, 's3', true, (s) => ({
       ...s,
       s3: { ...s.s3, ...draft },
     }));
@@ -97,8 +96,9 @@ const S3Form: React.FC = () => {
   };
 
   const handleDisconnect = async () => {
-    // Deactivate (keep the credentials so a later reconnect is one click).
-    await persistActiveCloudProvider(envConfig, null);
+    // Switch S3 off only — other providers keep syncing. Credentials stay so
+    // a later reconnect is one click.
+    await persistCloudProviderEnabled(envConfig, 's3', false);
     setShowSecret(false);
     eventDispatcher.dispatch('toast', { type: 'info', message: _('Disconnected') });
   };
@@ -124,7 +124,7 @@ const S3Form: React.FC = () => {
               'h-10 rounded-lg px-4 text-sm font-medium',
               'text-error hover:bg-error/10',
               'transition-colors duration-150',
-              'focus-visible:ring-error/40 focus-visible:outline-none focus-visible:ring-2',
+              'focus-visible:ring-error/40 focus-visible:outline-hidden focus-visible:ring-2',
             )}
           >
             {_('Disconnect')}
@@ -150,7 +150,7 @@ const S3Form: React.FC = () => {
           id='s3-endpoint'
           type='text'
           placeholder='https://<account-id>.r2.cloudflarestorage.com'
-          className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+          className='input eink-bordered h-11 w-full text-sm focus:outline-hidden'
           spellCheck='false'
           value={endpoint}
           onChange={(e) => setEndpoint(e.target.value)}
@@ -165,7 +165,7 @@ const S3Form: React.FC = () => {
           id='s3-bucket'
           type='text'
           placeholder='readest'
-          className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+          className='input eink-bordered h-11 w-full text-sm focus:outline-hidden'
           spellCheck='false'
           value={bucket}
           onChange={(e) => setBucket(e.target.value)}
@@ -180,7 +180,7 @@ const S3Form: React.FC = () => {
           id='s3-region'
           type='text'
           placeholder='auto'
-          className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+          className='input eink-bordered h-11 w-full text-sm focus:outline-hidden'
           spellCheck='false'
           value={region}
           onChange={(e) => setRegion(e.target.value)}
@@ -195,7 +195,7 @@ const S3Form: React.FC = () => {
           id='s3-access-key-id'
           type='text'
           placeholder={_('Your Access Key ID')}
-          className='input input-bordered eink-bordered h-11 w-full text-sm focus:outline-none'
+          className='input eink-bordered h-11 w-full text-sm focus:outline-hidden'
           spellCheck='false'
           value={accessKeyId}
           onChange={(e) => setAccessKeyId(e.target.value)}
@@ -212,7 +212,7 @@ const S3Form: React.FC = () => {
             id='s3-secret-access-key'
             type={showSecret ? 'text' : 'password'}
             placeholder={_('Your Secret Access Key')}
-            className='input input-bordered eink-bordered h-11 w-full pe-11 text-sm focus:outline-none'
+            className='input eink-bordered h-11 w-full pe-11 text-sm focus:outline-hidden'
             value={secretAccessKey}
             onChange={(e) => setSecretAccessKey(e.target.value)}
             autoComplete='off'
@@ -222,10 +222,10 @@ const S3Form: React.FC = () => {
             onClick={() => setShowSecret((v) => !v)}
             className={clsx(
               'absolute end-2 top-1/2 -translate-y-1/2',
-              'flex h-8 w-8 items-center justify-center rounded',
+              'flex h-8 w-8 items-center justify-center rounded-sm',
               'text-base-content/60 hover:text-base-content',
               'hover:bg-base-200/60 transition-colors duration-150',
-              'focus-visible:ring-base-content/15 focus-visible:outline-none focus-visible:ring-2',
+              'focus-visible:ring-base-content/15 focus-visible:outline-hidden focus-visible:ring-2',
             )}
             aria-label={showSecret ? _('Hide password') : _('Show password')}
             title={showSecret ? _('Hide password') : _('Show password')}
@@ -247,7 +247,7 @@ const S3Form: React.FC = () => {
           className={clsx(
             'btn btn-contrast',
             'h-10 min-h-10 rounded-lg border-0 px-5 text-sm font-medium',
-            'focus-visible:ring-base-content/40 focus-visible:outline-none focus-visible:ring-2',
+            'focus-visible:ring-base-content/40 focus-visible:outline-hidden focus-visible:ring-2',
             isConnecting && 'opacity-60',
           )}
         >

@@ -22,21 +22,33 @@ use tauri_plugin_fs::FsExt;
 
 #[cfg(desktop)]
 use tauri::{Listener, Url};
+mod backup_zip;
+#[cfg(target_os = "macos")]
+mod browser_cookies_macos;
+mod browser_fetch;
 mod clip_url;
+mod comic_parser;
+mod cover_thumbnail;
 mod dir_scanner;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod discord_rpc;
 mod epub_parser;
+#[cfg(all(target_os = "linux", any(feature = "cef", test)))]
+mod linux_display;
+mod localsend;
 #[cfg(target_os = "macos")]
 mod macos;
+mod media_proxy;
 mod mobi_parser;
 mod nightly_update;
 mod parser_common;
+mod pdf_parser;
 mod range_file;
 mod sentry_config;
 #[cfg(desktop)]
 mod spawn_fresh_browser;
 mod transfer_file;
+mod web_browser;
 #[cfg(desktop)]
 mod window_state;
 #[cfg(target_os = "windows")]
@@ -52,7 +64,7 @@ use tauri_plugin_opener::OpenerExt;
 use transfer_file::{download_file, upload_file};
 
 #[cfg(any(desktop, target_os = "ios"))]
-fn allow_file_in_scopes(app: &AppHandle, files: Vec<PathBuf>) {
+fn allow_file_in_scopes<R: tauri::Runtime>(app: &AppHandle<R>, files: Vec<PathBuf>) {
     let fs_scope = app.fs_scope();
     let asset_protocol_scope = app.asset_protocol_scope();
     for file in &files {
@@ -69,7 +81,7 @@ fn allow_file_in_scopes(app: &AppHandle, files: Vec<PathBuf>) {
     }
 }
 
-fn allow_dir_in_scopes(app: &AppHandle, dir: &PathBuf) {
+fn allow_dir_in_scopes<R: tauri::Runtime>(app: &AppHandle<R>, dir: &PathBuf) {
     let fs_scope = app.fs_scope();
     let asset_protocol_scope = app.asset_protocol_scope();
     if let Err(e) = fs_scope.allow_directory(dir, true) {
@@ -129,7 +141,11 @@ fn allow_dir_in_scopes(app: &AppHandle, dir: &PathBuf) {
 ///     every launch, so the in-memory scope set stays in sync with
 ///     the user's persisted intent.
 #[command]
-fn allow_paths_in_scopes(_app: AppHandle, _paths: Vec<String>, _is_directory: bool) {
+fn allow_paths_in_scopes<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    _paths: Vec<String>,
+    _is_directory: bool,
+) {
     #[cfg(desktop)]
     {
         let fs_scope = _app.fs_scope();
@@ -205,7 +221,7 @@ fn get_files_from_argv(argv: Vec<String>) -> Vec<PathBuf> {
 }
 
 #[cfg(desktop)]
-fn set_window_open_with_files(app: &AppHandle, files: Vec<PathBuf>) {
+fn set_window_open_with_files<R: tauri::Runtime>(app: &AppHandle<R>, files: Vec<PathBuf>) {
     let files = files
         .into_iter()
         .map(|f| {
@@ -225,7 +241,7 @@ fn set_window_open_with_files(app: &AppHandle, files: Vec<PathBuf>) {
 }
 
 #[command]
-async fn start_server(window: Window) -> Result<u16, String> {
+async fn start_server<R: tauri::Runtime>(window: Window<R>) -> Result<u16, String> {
     start(move |url| {
         // Because of the unprotected localhost port, you must verify the URL here.
         // Preferebly send back only the token, or nothing at all if you can handle everything else in Rust.
@@ -246,6 +262,55 @@ fn get_executable_dir() -> String {
         .and_then(|path| path.parent().map(|p| p.to_path_buf()))
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default()
+}
+
+/// Logical size of the main window the first time the app runs. Later launches
+/// restore whatever the user left behind (`tauri_plugin_window_state`), so this
+/// is a starting point, not a preference. macOS has always opened at this size;
+/// Windows and Linux used to open at 800x600, which is cramped for the library
+/// grid and a two-page spread. It clears a 1080p work area whole.
+#[cfg(desktop)]
+const DEFAULT_WINDOW_SIZE: (f64, f64) = (1280.0, 800.0);
+
+// The first-launch window size, shrunk to fit `work_area` — the monitor minus
+// its taskbar/panels, in logical pixels — when the default is too big for it.
+// A fixed 1280x800 hangs off the bottom of a 1366x768 laptop screen, and a
+// window that opens partly off-screen can be impossible to resize back.
+// `None` (no monitor reported, or one reporting an empty work area) keeps the
+// default: a window that is too large stays reachable, one sized from a bogus
+// zero-height screen does not.
+#[cfg(desktop)]
+fn default_window_size(work_area: Option<(f64, f64)>) -> (f64, f64) {
+    let Some((width, height)) = work_area.filter(|(w, h)| *w > 0.0 && *h > 0.0) else {
+        return DEFAULT_WINDOW_SIZE;
+    };
+    (
+        DEFAULT_WINDOW_SIZE.0.min(width * 0.9),
+        DEFAULT_WINDOW_SIZE.1.min(height * 0.9),
+    )
+}
+
+/// Windows 10 renders the native shadow of an undecorated window as a 1px
+/// border on the left, right and bottom edges but not the top, which reads
+/// as a broken frame (tauri-apps/tauri#13134). Windows 11 (build >= 22000)
+/// draws a uniform border, so only there is the shadow worth keeping.
+#[cfg(all(desktop, target_os = "windows"))]
+fn undecorated_shadow_is_symmetric() -> bool {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
+
+    RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion")
+        .and_then(|key| key.get_value::<String, _>("CurrentBuild"))
+        // Unknown version: keep the current (shadowed) behavior.
+        .map_or(true, |build| {
+            build.parse::<u32>().map_or(true, |b| b >= 22000)
+        })
+}
+
+#[cfg(all(desktop, not(target_os = "windows"), not(target_os = "macos")))]
+fn undecorated_shadow_is_symmetric() -> bool {
+    true
 }
 
 // Pure decision for whether the in-app updater should be hidden. Kept
@@ -294,14 +359,54 @@ fn is_updater_disabled() -> bool {
     updater_disabled()
 }
 
-// Record the WebView engine/version (parsed from the app's User-Agent) so Sentry
-// events can be correlated with WebView version. Called once from
-// `NativeAppService.init()`; no-op when Sentry is disabled.
+// Record the WebView engine/version so Sentry events can be correlated with
+// the WebView build. Chromium's UA-Reduction freezes the User-Agent to a stub
+// on Windows WebView2 (e.g. "152.0.0.0"), so prefer the version reported by
+// the runtime itself and keep the engine from the User-Agent parse. Called
+// once from `NativeAppService.init()`; no-op when Sentry is disabled.
 #[tauri::command]
 fn set_webview_info(user_agent: String) {
-    if let Some((engine, version)) = sentry_config::parse_webview_info(&user_agent) {
-        sentry_config::set_webview_info(engine, version);
+    let parsed = sentry_config::parse_webview_info(&user_agent);
+    let version =
+        runtime_webview_version().or_else(|| parsed.as_ref().map(|(_, version)| version.clone()));
+    if let (Some((engine, _)), Some(version)) = (&parsed, version) {
+        sentry_config::set_webview_info(engine.clone(), version);
     }
+}
+
+#[derive(serde::Serialize)]
+struct WebViewInfo {
+    engine: String,
+    version: String,
+}
+
+// The WebView engine/version for the About window's display. The runtime
+// query is only needed on Windows, where the User-Agent is reduced to a
+// stub; the other platforms keep their User-Agent-derived labels.
+#[tauri::command]
+fn get_webview_version() -> Option<WebViewInfo> {
+    if std::env::consts::OS != "windows" {
+        return None;
+    }
+    Some(WebViewInfo {
+        engine: "WebView2".to_string(),
+        version: runtime_webview_version()?,
+    })
+}
+
+// `tauri::webview_version()` is wry's query. On Linux the app runs on CEF, where
+// it would report the WebKitGTK version instead, and referencing it keeps the
+// WebKitGTK libraries linked, which the Nix package strips so Chromium's zygote
+// stays single-threaded. CEF's User-Agent carries the full Chromium version.
+#[cfg(not(target_os = "linux"))]
+fn runtime_webview_version() -> Option<String> {
+    let version = tauri::webview_version().ok()?;
+    Some(version.trim().to_string()).filter(|version| !version.is_empty())
+}
+
+#[cfg(target_os = "linux")]
+fn runtime_webview_version() -> Option<String> {
+    None
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -311,14 +416,40 @@ struct SingleInstancePayload {
     cwd: String,
 }
 
+/// The webview runtime this build drives: CEF on Linux, Wry everywhere else
+/// (the `cef` feature is a no-op off Linux, see Cargo.toml). Named explicitly
+/// because several plugins pull in tauri's default `wry` feature even when CEF
+/// is selected, which leaves `Builder::default()` ambiguous there.
+///
+/// The one Linux build that is still Wry is the webdriver test harness
+/// (scripts/test-tauri.sh): tauri-plugin-webdriver drives the webview through
+/// webkit2gtk there and has no CEF backend.
+#[cfg(all(feature = "cef", target_os = "linux"))]
+type AppRuntime = tauri::Cef;
+#[cfg(not(all(feature = "cef", target_os = "linux")))]
+type AppRuntime = tauri::Wry;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg_attr(all(feature = "cef", target_os = "linux"), tauri::cef_entry_point)]
 pub fn run() {
+    // The CEF runtime forces X11, even on Wayland. Check before initializing
+    // Tauri, which otherwise hides the missing display behind CreateWindow.
+    // cef_entry_point routes helper processes away before reaching this code.
+    #[cfg(all(feature = "cef", target_os = "linux"))]
+    if let Err(message) = linux_display::check_display(std::env::var_os("DISPLAY").as_deref()) {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
+
     // Initialize Sentry as early as possible so panics during startup are
     // captured. `None` DSN (unset SENTRY_DSN) => disabled, so local and fork
-    // builds don't report. Desktop also starts the out-of-process minidump
-    // handler for native crashes; on mobile, native crashes belong to the
-    // sentry-android / sentry-cocoa SDKs. The guard must outlive the app, so it
-    // is held until `run()` returns (after the blocking `.run(...)` call).
+    // builds don't report. This client covers Rust panics and the events the
+    // WebView forwards; native crashes belong to the sentry-android /
+    // sentry-cocoa SDKs on mobile and go unreported on desktop, where the
+    // out-of-process minidump handler is deliberately off (see the
+    // `minidump_feature_is_enabled_on_no_target` test). The guard must outlive
+    // the app, so it is held until `run()` returns (after the blocking
+    // `.run(...)` call).
     let sentry_guard = sentry_config::sentry_dsn().map(|dsn| {
         sentry::init((
             dsn,
@@ -332,11 +463,26 @@ pub fn run() {
                 // version from the kernel string) so events group correctly.
                 before_send: Some(std::sync::Arc::new(|mut event| {
                     // Drop known-benign browser noise (e.g. View Transition
-                    // skipped/aborted) before it is reported.
+                    // skipped/aborted, ResizeObserver loop) before it is reported.
                     if event.exception.values.iter().any(|ex| {
                         ex.value
                             .as_deref()
                             .is_some_and(sentry_config::is_ignored_browser_error)
+                    }) {
+                        return None;
+                    }
+                    // Drop the contained MOBI cover panic: the `mobi` crate panics
+                    // on a corrupt cover record, which extract_cover catch_unwinds
+                    // (the import still succeeds), but the panic hook reports it
+                    // anyway. Match our own frame so unrelated slice panics stay.
+                    if event.exception.values.iter().any(|ex| {
+                        ex.stacktrace.iter().any(|st| {
+                            st.frames.iter().any(|f| {
+                                f.function
+                                    .as_deref()
+                                    .is_some_and(sentry_config::is_mobi_cover_panic_frame)
+                            })
+                        })
                     }) {
                         return None;
                     }
@@ -372,12 +518,24 @@ pub fn run() {
         ))
     });
 
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
-    let _minidump_guard = sentry_guard
-        .as_ref()
-        .map(|guard| tauri_plugin_sentry::minidump::init(guard));
+    let builder = tauri::Builder::<AppRuntime>::new();
 
-    let builder = tauri::Builder::default()
+    // `READEST_CDP_PORT=9222` hands the port to CEF as `--remote-debugging-port`,
+    // so a debugger or test driver can attach over the Chrome DevTools Protocol
+    // on 127.0.0.1 (see docs/testing.md). CEF also honours the switch straight
+    // off argv, but tauri-plugin-cli parses the same argv for open-with paths and
+    // warns about the unknown argument on every launch, so the env var is the
+    // supported way in.
+    #[cfg(all(feature = "cef", target_os = "linux"))]
+    let builder = match std::env::var("READEST_CDP_PORT") {
+        Ok(port) if !port.is_empty() => builder.runtime_init_attrs(
+            tauri::CefRuntimeAttributes::default()
+                .command_line_arg("remote-debugging-port", Some(port)),
+        ),
+        _ => builder,
+    };
+
+    let builder = builder
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
@@ -395,15 +553,22 @@ pub fn run() {
             get_environment_variable,
             get_executable_dir,
             set_webview_info,
+            get_webview_version,
             #[cfg(desktop)]
             is_updater_disabled,
             allow_paths_in_scopes,
+            cover_thumbnail::optimize_cover_thumbnails,
             dir_scanner::read_dir,
+            backup_zip::write_backup_zip,
+            backup_zip::extract_backup_zip,
             epub_parser::parse_epub_metadata,
             epub_parser::extract_epub_cover_full,
             epub_parser::parse_epub_full,
+            comic_parser::get_comic_page_sizes,
             mobi_parser::parse_mobi_metadata,
             mobi_parser::extract_mobi_cover_full,
+            pdf_parser::parse_pdf_metadata,
+            pdf_parser::render_pdf_cover,
             #[cfg(target_os = "macos")]
             macos::safari_auth::auth_with_safari,
             #[cfg(target_os = "macos")]
@@ -411,12 +576,30 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             macos::traffic_light::set_traffic_lights,
             #[cfg(target_os = "macos")]
+            macos::traffic_light::set_window_title,
+            #[cfg(target_os = "macos")]
             macos::system_dictionary::show_lookup_popover,
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             discord_rpc::update_book_presence,
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             discord_rpc::clear_book_presence,
             clip_url::clip_url,
+            web_browser::open_web_browser,
+            browser_fetch::fetch_web_browser_resource,
+            media_proxy::get_media_proxy_base,
+            web_browser::set_web_browser_status,
+            web_browser::extract_web_browser_archive,
+            localsend::commands::localsend_start,
+            localsend::commands::localsend_stop,
+            localsend::commands::localsend_get_status,
+            localsend::commands::localsend_list_devices,
+            localsend::commands::localsend_announce,
+            localsend::commands::localsend_set_discoverable,
+            localsend::commands::localsend_is_alive,
+            localsend::commands::localsend_respond,
+            localsend::commands::localsend_cancel_receive,
+            localsend::commands::localsend_send_files,
+            localsend::commands::localsend_cancel_send,
             #[cfg(desktop)]
             spawn_fresh_browser::spawn_fresh_browser,
             nightly_update::verify_update_signature,
@@ -479,6 +662,9 @@ pub fn run() {
     let builder = builder.plugin(macos::traffic_light::init());
 
     #[cfg(target_os = "macos")]
+    let builder = builder.plugin(macos::window::init());
+
+    #[cfg(target_os = "macos")]
     let builder = builder.plugin(macos::safari_auth::init());
 
     #[cfg(target_os = "ios")]
@@ -514,6 +700,7 @@ pub fn run() {
                 let discord_client = Arc::new(Mutex::new(discord_rpc::DiscordRpcClient::new()));
                 app.manage(discord_client);
             }
+            app.manage(localsend::LocalSendState::default());
 
             #[cfg(desktop)]
             {
@@ -578,8 +765,25 @@ pub fn run() {
             #[cfg(not(desktop))]
             let updater_disabled = false;
 
+            // One id per app run. The OS keeps re-delivering the URL the app was
+            // launched with — Android re-reads the sticky `activity.intent`
+            // every time it recreates the Activity, iOS reloads the document
+            // when WebKit recycles the WebContent process, and the deep-link
+            // plugin never clears its stored URL (#6104). The webview's
+            // consume-once marker therefore has to outlive the document but
+            // still expire on a real relaunch, so it keys off this.
+            let app_run_id = format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            );
+
             let init_script = format!(
                 r#"
+                    window.__READEST_APP_RUN_ID__ = "{app_run_id}";
                     if ({is_eink}) window.__READEST_IS_EINK = true;
                     if ({cli_access}) window.__READEST_CLI_ACCESS = true;
                     if ({is_appimage}) window.__READEST_IS_APPIMAGE = true;
@@ -605,6 +809,7 @@ pub fn run() {
                         }}
                     }});
                 "#,
+                app_run_id = app_run_id,
                 is_eink = is_eink,
                 cli_access = cli_access,
                 is_appimage = is_appimage,
@@ -645,23 +850,34 @@ pub fn run() {
                     true
                 });
 
-            #[cfg(target_os = "macos")]
-            let win_builder = win_builder.inner_size(1280.0, 800.0).resizable(true);
-            #[cfg(all(not(target_os = "macos"), desktop))]
-            let win_builder = win_builder.inner_size(800.0, 600.0).resizable(true);
+            #[cfg(desktop)]
+            let win_builder = {
+                let work_area = app.primary_monitor().ok().flatten().map(|monitor| {
+                    let size = monitor
+                        .work_area()
+                        .size
+                        .to_logical::<f64>(monitor.scale_factor());
+                    (size.width, size.height)
+                });
+                let (width, height) = default_window_size(work_area);
+                win_builder.inner_size(width, height).resizable(true)
+            };
 
+            // The overlay title bar draws its title over the app's own header,
+            // so `macos::window::init()` hides the title text and the window
+            // can carry a real name for the Window menu and VoiceOver.
             #[cfg(target_os = "macos")]
             let win_builder = win_builder
                 .decorations(true)
                 .title_bar_style(TitleBarStyle::Overlay)
-                .title("");
+                .title("Readest");
 
             #[cfg(all(not(target_os = "macos"), desktop))]
             let win_builder = {
                 let mut builder = win_builder
                     .decorations(false)
                     .visible(false)
-                    .shadow(true)
+                    .shadow(undecorated_shadow_is_symmetric())
                     .title("Readest");
 
                 #[cfg(target_os = "windows")]
@@ -695,26 +911,29 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 let window = win_builder.build().unwrap();
-                // On macOS, closing a window (via Cmd+W or the red traffic light) should
-                // not quit the app — only Cmd+Q should. Hide the window instead so the
-                // app keeps running in the dock, and restore it when the user reopens
-                // the app from the dock.
+                // On macOS, closing a window (via Cmd+W or the red traffic light)
+                // should not quit the app — only Cmd+Q should — and normally hides
+                // instead of minimizing (#5240): the app keeps running in the dock
+                // and the window is restored when the user reopens the app from the
+                // dock. On Tahoe the hide is defensive against the `orderOut:`
+                // phantom-window regression (#4875); see
+                // `macos::window::hide_main_window` for the fullscreen-failure
+                // fallback.
                 let window_for_close = window.clone();
-                window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                window.on_window_event(move |event| match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
-                        // macOS 26 (Tahoe) regressed `NSWindow` ordering: `orderOut:`
-                        // (what `hide()` maps to) can leave a focused black phantom
-                        // window on screen instead of hiding it (#4875). Minimize
-                        // instead on Tahoe — a different AppKit path that still keeps
-                        // the app in the dock and preserves the open book. The Reopen
-                        // handler below already unminimizes on dock reopen.
-                        if macos::os_version::is_macos_tahoe_or_later() {
-                            let _ = window_for_close.minimize();
-                        } else {
-                            let _ = window_for_close.hide();
-                        }
+                        macos::window::hide_main_window(&window_for_close);
                     }
+                    // Safety net for JS-side `show()` callers (e.g.
+                    // `ensureMainLibraryWindow` in src/utils/nav.ts re-shows a hidden
+                    // main window from a reader window without a dock Reopen): the
+                    // window can only become key after it is back on screen, so any
+                    // pending defensively-zeroed frame must be restored by now.
+                    tauri::WindowEvent::Focused(true) => {
+                        macos::window::restore_main_window_frame(&window_for_close);
+                    }
+                    _ => {}
                 });
             }
 
@@ -753,9 +972,21 @@ pub fn run() {
                         ..
                     } => {
                         if let Some(window) = app_handle.get_webview_window("main") {
+                            // Undo a pending Tahoe defensive hide (zeroed frame) before
+                            // showing so the window reappears at its real position and
+                            // size. No-op when the window was hidden plainly.
+                            macos::window::restore_main_window_frame(&window);
                             let _ = window.show();
                             let _ = window.set_focus();
                             let _ = window.unminimize();
+                        }
+                    }
+                    // A programmatic exit emits ExitRequested before the window-state
+                    // plugin performs its final save. Restore any zeroed frame while
+                    // the window is still hidden so live geometry remains valid.
+                    tauri::RunEvent::ExitRequested { .. } => {
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            macos::window::restore_main_window_frame(&window);
                         }
                     }
                     _ => {}
@@ -766,7 +997,38 @@ pub fn run() {
 
 #[cfg(all(test, desktop))]
 mod tests {
-    use super::compute_updater_disabled;
+    use super::{compute_updater_disabled, default_window_size, DEFAULT_WINDOW_SIZE};
+
+    #[test]
+    fn monitor_with_room_keeps_the_shipped_default() {
+        // 1080p minus a taskbar is the everyday case, and the default is picked
+        // to fit it whole; anything larger fits too.
+        assert_eq!(
+            default_window_size(Some((1920.0, 1040.0))),
+            DEFAULT_WINDOW_SIZE
+        );
+        assert_eq!(
+            default_window_size(Some((2560.0, 1400.0))),
+            DEFAULT_WINDOW_SIZE
+        );
+    }
+
+    #[test]
+    fn small_laptop_screen_shrinks_the_window() {
+        // 1366x768 is the screen the old 800x600 default was sized for, and the
+        // one a fixed 1280x800 would hang off the bottom of.
+        let (width, height) = default_window_size(Some((1366.0, 728.0)));
+        assert!((width - 1229.4).abs() < 0.01, "width {width}");
+        assert!((height - 655.2).abs() < 0.01, "height {height}");
+    }
+
+    #[test]
+    fn unknown_or_empty_work_area_falls_back_to_the_default() {
+        // No monitor reported, or one reporting nothing usable (a display that
+        // is off, or a compositor that has not laid out the screen yet).
+        assert_eq!(default_window_size(None), DEFAULT_WINDOW_SIZE);
+        assert_eq!(default_window_size(Some((0.0, 0.0))), DEFAULT_WINDOW_SIZE);
+    }
 
     #[test]
     fn env_opt_out_disables_on_any_desktop() {

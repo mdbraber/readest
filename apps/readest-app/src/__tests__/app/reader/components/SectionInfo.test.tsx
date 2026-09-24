@@ -1,6 +1,14 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import SectionInfo from '@/app/reader/components/SectionInfo';
+
+let currentBookData:
+  | {
+      isFixedLayout?: boolean;
+      book?: { title: string; metadata?: { series?: string; seriesIndex?: number } };
+    }
+  | undefined;
+let currentMarginTopPx = 44;
 
 vi.mock('@/context/EnvContext', () => ({
   useEnv: () => ({ appService: { isAndroidApp: false, isMobile: true } }),
@@ -14,14 +22,29 @@ vi.mock('@/store/readerStore', () => ({
   useReaderStore: () => ({
     hoveredBookKey: '',
     getView: () => null,
-    getViewSettings: () => ({ marginTopPx: 44 }),
+    getViewSettings: () => ({ marginTopPx: currentMarginTopPx }),
     setHoveredBookKey: vi.fn(),
   }),
 }));
 
+vi.mock('@/store/bookDataStore', () => {
+  const state = { getBookData: () => currentBookData };
+  return {
+    useBookDataStore: <R,>(selector?: (s: typeof state) => R) =>
+      selector ? selector(state) : state,
+  };
+});
+
 vi.mock('@/hooks/useTranslation', () => ({
   useTranslation: () => (key: string) => key,
 }));
+
+// Module-level mock state; reset after every test so a failing assertion (or
+// a test that forgets) cannot leak book data into its neighbours.
+afterEach(() => {
+  currentBookData = undefined;
+  currentMarginTopPx = 44;
+});
 
 const baseProps = {
   bookKey: 'book-1',
@@ -67,28 +90,149 @@ describe('SectionInfo notch mask', () => {
     expect(notch.classList.contains('notch-masked')).toBe(false);
     expect(notch.classList.contains('bg-base-100')).toBe(false);
   });
+
+  it('keeps the notch transparent for fixed-layout documents so they render edge to edge', () => {
+    // FXL pages in scrolled mode fill the screen and their chrome overlays the
+    // page (mix-blend-difference title, #4901) instead of reserving bands. The
+    // reflowable notch mask would paint an opaque strip over the page at the
+    // camera hole / status bar, clipping the document.
+    currentBookData = { isFixedLayout: true };
+    const { container } = render(<SectionInfo {...baseProps} />);
+    const notch = container.querySelector('.notch-area') as HTMLElement;
+
+    expect(notch.classList.contains('notch-masked')).toBe(false);
+    expect(notch.classList.contains('bg-base-100')).toBe(false);
+  });
+});
+
+describe('SectionInfo title band on negative top margins (#5303)', () => {
+  // Decreasing the top margin below 16px must lift the title band into the
+  // notch instead of collapsing it (negative CSS height is invalid, so the
+  // title used to stay put and overlap the book text). The band bottom always
+  // equals the content top: max(topInset + marginTopPx, 16).
+  it('keeps the classic geometry at the default 44px margin', () => {
+    currentMarginTopPx = 44;
+    const { container } = render(<SectionInfo {...baseProps} />);
+    const info = container.querySelector('.sectioninfo') as HTMLElement;
+
+    expect(info.style.top).toBe('45px');
+    expect(info.style.height).toBe('44px');
+  });
+
+  it('lifts the band into the notch on a negative margin', () => {
+    currentMarginTopPx = -20;
+    const props = { ...baseProps, contentInsets: { top: 25, right: 0, bottom: 0, left: 0 } };
+    const { container } = render(<SectionInfo {...props} />);
+    const info = container.querySelector('.sectioninfo') as HTMLElement;
+
+    expect(info.style.top).toBe('9px');
+    expect(info.style.height).toBe('16px');
+  });
+
+  it('shrinks the scrolled-mode notch mask to the lifted content top', () => {
+    // Content now starts inside the notch; a full-height mask would occlude it.
+    currentMarginTopPx = -20;
+    const props = { ...baseProps, contentInsets: { top: 25, right: 0, bottom: 0, left: 0 } };
+    const { container } = render(<SectionInfo {...props} />);
+    const notch = container.querySelector('.notch-area') as HTMLElement;
+
+    expect(notch.style.clipPath).toBe('inset(0 0 calc(100% - 25px) 0)');
+  });
+
+  it('pins the band to the screen top at the negative-margin limit', () => {
+    currentMarginTopPx = -45;
+    const props = { ...baseProps, contentInsets: { top: 0, right: 0, bottom: 0, left: 0 } };
+    const { container } = render(<SectionInfo {...props} />);
+    const info = container.querySelector('.sectioninfo') as HTMLElement;
+    const notch = container.querySelector('.notch-area') as HTMLElement;
+
+    expect(info.style.top).toBe('0px');
+    expect(info.style.height).toBe('16px');
+    expect(notch.style.clipPath).toBe('inset(0 0 calc(100% - 16px) 0)');
+  });
+
+  it('stacks the title above the z-10 notch mask it now overlaps', () => {
+    // The lifted band sits inside the mask strip in scrolled mode; without a
+    // z-index of its own the z-10 mask paints over the title (z-auto loses to
+    // any positive z sibling regardless of DOM order).
+    currentMarginTopPx = -45;
+    const { container } = render(<SectionInfo {...baseProps} />);
+    const info = container.querySelector('.sectioninfo') as HTMLElement;
+
+    expect(info.classList.contains('z-10')).toBe(true);
+  });
+
+  it('stays below the header toolbar when the band is not lifted', () => {
+    // The desktop HeaderBar wrapper is z-auto, so its z-10 bar (and the z-20
+    // button groups confined inside that stacking context) lose to a later
+    // z-10 sibling. An unconditional z-10 here put the band over the toolbar
+    // and its hover trigger, making the buttons unclickable (PR #5447 CI).
+    currentMarginTopPx = 44;
+    const { container } = render(<SectionInfo {...baseProps} />);
+    const info = container.querySelector('.sectioninfo') as HTMLElement;
+
+    expect(info.classList.contains('z-10')).toBe(false);
+  });
 });
 
 describe('SectionInfo contrast against the page (#4901)', () => {
-  // A light-mode PDF shown under a dark theme keeps its white page, but the
-  // running header text was themed for the dark UI (neutral-content, light)
-  // and became unreadable on the white page. mix-blend-mode: difference makes
-  // the text invert against whatever is actually behind it (the page or the
-  // themed margin), so it stays legible over any background.
-  it('blends the section title against the background in non-eink mode', () => {
+  // A light-mode PDF shown under a dark theme keeps its white page, so the
+  // running header blends against the real backdrop (text-white/75 +
+  // mix-blend-difference) to stay legible on any background. Reflowable books
+  // theme their own page to the UI, so the header uses plain base-content text
+  // instead of the blend.
+  it('blends the section title over a fixed-layout page in non-eink mode', () => {
+    currentBookData = { isFixedLayout: true };
     const { container } = render(<SectionInfo {...baseProps} isEink={false} />);
     const info = container.querySelector('.sectioninfo') as HTMLElement;
 
     expect(info.classList.contains('mix-blend-difference')).toBe(true);
     expect(info.classList.contains('text-white/75')).toBe(true);
-    // The theme-fixed neutral color is what made it unreadable on a white page.
-    expect(info.classList.contains('text-neutral-content')).toBe(false);
+  });
+
+  it('uses themed base-content text for reflowable books in non-eink mode', () => {
+    currentBookData = { isFixedLayout: false };
+    const { container } = render(<SectionInfo {...baseProps} isEink={false} />);
+    const info = container.querySelector('.sectioninfo') as HTMLElement;
+
+    expect(info.classList.contains('mix-blend-difference')).toBe(false);
+    expect(info.classList.contains('text-white/75')).toBe(false);
+    expect(info.classList.contains('text-base-content')).toBe(true);
   });
 
   it('does not blend in eink mode (base-content text on the e-ink page)', () => {
+    currentBookData = { isFixedLayout: true };
     const { container } = render(<SectionInfo {...baseProps} isEink={true} />);
     const info = container.querySelector('.sectioninfo') as HTMLElement;
 
     expect(info.classList.contains('mix-blend-difference')).toBe(false);
+  });
+});
+
+describe('SectionInfo book metadata data attributes (#5776)', () => {
+  // Custom Reader UI CSS has no other way to reach the book's series: the
+  // running header only prints the section title. The attributes sit inert on
+  // .sectioninfo for `attr()` / `[data-book-series]` rules.
+  it('exposes title, series and series index on .sectioninfo', () => {
+    currentBookData = {
+      isFixedLayout: false,
+      book: { title: 'Leviathan Wakes', metadata: { series: 'The Expanse', seriesIndex: 1 } },
+    };
+    const { container } = render(<SectionInfo {...baseProps} />);
+    const info = container.querySelector('.sectioninfo') as HTMLElement;
+
+    expect(info.getAttribute('data-book-title')).toBe('Leviathan Wakes');
+    expect(info.getAttribute('data-book-series')).toBe('The Expanse');
+    expect(info.getAttribute('data-book-series-index')).toBe('1');
+  });
+
+  it('leaves the series attributes off for a standalone book', () => {
+    currentBookData = { isFixedLayout: false, book: { title: 'Dune', metadata: {} } };
+    const { container } = render(<SectionInfo {...baseProps} />);
+    const info = container.querySelector('.sectioninfo') as HTMLElement;
+
+    expect(info.getAttribute('data-book-title')).toBe('Dune');
+    expect(info.hasAttribute('data-book-series')).toBe(false);
+    expect(info.hasAttribute('data-book-series-index')).toBe(false);
   });
 });

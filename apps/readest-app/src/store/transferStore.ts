@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { BaseDir } from '@/types/system';
+import { INDETERMINATE_PROGRESS } from '@/utils/transfer';
 
 export type TransferType = 'upload' | 'download' | 'delete';
 export type TransferStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled';
@@ -143,6 +144,36 @@ const generateTransferId = (): string => {
 export const isFailedLikeTransfer = (t: TransferItem): boolean =>
   t.status === 'failed' || (t.status === 'cancelled' && t.cancelReason !== 'policy');
 
+/**
+ * Per-book download progress for the covers' transfer overlay, keyed by book
+ * hash. Derived on read rather than mirrored into a second state: the queue
+ * keeps completed and failed rows as history (they are persisted to
+ * localStorage and restored on launch), and Clear Pending / Clear Completed
+ * remove rows outright, so any copy of this data has to be reconciled against
+ * both — and gets it wrong when a stale row outlives a live one for the same
+ * book. Only pending/in_progress rows are reported, which makes the result
+ * independent of iteration order and of whatever history the queue holds.
+ *
+ * A pending row has no bytes yet, so it reports {@link INDETERMINATE_PROGRESS}
+ * rather than its literal `progress: 0` — `restoreTransfers` resets interrupted
+ * transfers to pending/0, which would otherwise paint a frozen "0%" on every
+ * launch, permanently while the queue is paused.
+ */
+export const selectActiveBookDownloadProgress = (
+  transfers: Record<string, TransferItem>,
+): Record<string, number> => {
+  const progress: Record<string, number> = {};
+  for (const t of Object.values(transfers)) {
+    if (t.kind !== 'book' || t.type !== 'download') continue;
+    // in_progress always wins over pending, whichever is visited first.
+    if (t.status === 'in_progress') progress[t.bookHash] = t.progress;
+    else if (t.status === 'pending' && progress[t.bookHash] === undefined) {
+      progress[t.bookHash] = INDETERMINATE_PROGRESS;
+    }
+  }
+  return progress;
+};
+
 export const useTransferStore = create<TransferState>((set, get) => ({
   transfers: {},
   isQueuePaused: false,
@@ -223,14 +254,18 @@ export const useTransferStore = create<TransferState>((set, get) => ({
       const transfer = state.transfers[transferId];
       if (!transfer) return state;
 
-      // No-op when nothing changed: re-applying identical progress would
-      // otherwise allocate a new state on every call and re-render every
-      // subscriber, which can sustain a render/update loop (Sentry READEST-2).
+      // No-op when nothing meaningful changed: re-applying identical progress
+      // would otherwise allocate a new state on every call and re-render every
+      // subscriber, sustaining a render/update loop (Sentry READEST-2).
+      // transferSpeed is deliberately excluded: it is recomputed from wall-clock
+      // time on every emission (utils/transfer.ts), so it is almost always
+      // different and would defeat the guard. A speed-only delta is not worth a
+      // re-render. The primary defense against high-frequency churn is the
+      // per-transfer coalescing in transferManager.
       if (
         transfer.progress === progress &&
         transfer.transferredBytes === transferred &&
-        transfer.totalBytes === total &&
-        transfer.transferSpeed === speed
+        transfer.totalBytes === total
       ) {
         return state;
       }

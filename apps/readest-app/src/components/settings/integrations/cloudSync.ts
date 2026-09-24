@@ -4,7 +4,6 @@
  * import from components. Existing component-side imports keep working.
  */
 export {
-  withActiveCloudProvider,
-  persistActiveCloudProvider,
-  type CloudSyncActivationKind,
+  withCloudProviderEnabled,
+  persistCloudProviderEnabled,
 } from '@/services/sync/cloudSyncActivation';

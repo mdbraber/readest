@@ -18,6 +18,7 @@ import { ClosableFile } from '@/utils/file';
 import { ProgressHandler } from '@/utils/transfer';
 import { CLOUD_BOOKS_SUBDIR, CLOUD_REPLICAS_SUBDIR } from './constants';
 import { isBookFileContentSource, resolveBookContentSource } from './bookContent';
+import { getAbsOfflineDir } from '@/utils/audiobook';
 
 export async function deleteBook(
   fs: FileSystem,
@@ -49,7 +50,25 @@ export async function deleteBook(
       if (await fs.exists(dir, 'Books')) {
         await fs.removeDir(dir, 'Books', true);
       }
+      // The per-book TTS audio cache lives under Cache (kept out of Books/
+      // so backups and sync never pick it up); purge erases every trace of
+      // the book, so drop it too. Non-purge deletes leave it: like
+      // config.json, a re-downloaded book resumes with a warm audio cache.
+      const ttsCacheDir = `tts-cache/${book.hash}`;
+      if (await fs.exists(ttsCacheDir, 'Cache')) {
+        await fs.removeDir(ttsCacheDir, 'Cache', true);
+      }
     }
+
+    // An offline Audiobookshelf download keeps its tracks beside the book
+    // (#6256); purge already wiped the whole directory above.
+    if (book.format === 'ABS' && deleteAction !== 'purge') {
+      const offlineDir = getAbsOfflineDir(book.hash);
+      if (await fs.exists(offlineDir, 'Books')) {
+        await fs.removeDir(offlineDir, 'Books', true);
+      }
+    }
+    book.absDownloadedAt = null;
 
     if (deleteAction === 'both' && (await fs.exists(getCoverFilename(book), 'Books'))) {
       await fs.removeFile(getCoverFilename(book), 'Books');
@@ -88,11 +107,12 @@ export async function uploadFileToCloud(
   handleProgress: ProgressHandler,
   hash: string,
   temp: boolean = false,
+  media?: string,
 ): Promise<string | undefined> {
   console.log('Uploading file:', lfp, 'to', cfp);
   const file = await fs.openFile(lfp, base, cfp);
   const localFullpath = await resolveFilePath(lfp, base);
-  const downloadUrl = await uploadFile(file, localFullpath, handleProgress, hash, temp);
+  const downloadUrl = await uploadFile(file, localFullpath, handleProgress, hash, temp, media);
   const f = file as ClosableFile;
   if (f && f.close) {
     await f.close();
@@ -212,6 +232,7 @@ export async function uploadBook(
   completedFiles.count++;
 
   book.deletedAt = null;
+  book.fileSyncDeletionRequestedAt = null;
   book.updatedAt = Date.now();
   book.uploadedAt = Date.now();
   book.downloadedAt = Date.now();

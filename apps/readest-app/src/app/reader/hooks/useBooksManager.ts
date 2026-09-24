@@ -2,15 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEnv } from '@/context/EnvContext';
 import { useReaderStore } from '@/store/readerStore';
+import { useReaderProgressStore } from '@/store/readerProgressStore';
 import { useSidebarStore } from '@/store/sidebarStore';
 import { uniqueId } from '@/utils/misc';
 import { useParallelViewStore } from '@/store/parallelViewStore';
 import { navigateToReader } from '@/utils/nav';
 import { eventDispatcher } from '@/utils/event';
+import { consumePendingTTSAutoplay } from '@/utils/ttsAutoplay';
+import { useTranslation } from '@/hooks/useTranslation';
 
 const useBooksManager = () => {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const _ = useTranslation();
   const { envConfig } = useEnv();
   const { bookKeys } = useReaderStore();
   const { setBookKeys, initViewState } = useReaderStore();
@@ -29,10 +33,20 @@ const useBooksManager = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookKeys, shouldUpdateSearchParams]);
 
+  // initViewState is called fire-and-forget here; it rejects when the book is
+  // missing (e.g. "Book not found" after a library reload dropped the in-memory
+  // entry). It already records the failure on the view state, so just keep the
+  // rejection from becoming an unhandled rejection (READEST-1V) and let the user
+  // know the open failed.
+  const handleOpenError = (error: unknown) => {
+    console.warn('Failed to open book in reader', error);
+    eventDispatcher.dispatch('toast', { message: _('Unable to open book'), type: 'error' });
+  };
+
   // Append a new book and sync with bookKeys and URL
   const appendBook = (id: string, isPrimary: boolean, isParallel: boolean) => {
     const newKey = `${id}-${uniqueId()}`;
-    initViewState(envConfig, id, newKey, isPrimary);
+    initViewState(envConfig, id, newKey, isPrimary).catch(handleOpenError);
     if (!bookKeys.includes(newKey)) {
       const updatedKeys = [...bookKeys, newKey];
       setBookKeys(updatedKeys);
@@ -70,6 +84,33 @@ const useBooksManager = () => {
     });
   };
 
+  // Car autoplay needs both the view and its initial reading position.
+  // Relocation commits can arrive after view initialization; useTTSControl
+  // cannot start without that position. Caveat: unblockAudio is gesture-gated on WebAudio, so
+  // an Edge-engine autoplay may be a no-op if the launch is not treated as a
+  // user gesture on Android WebView; native TTS is unaffected.
+  const startTTSWhenReady = (bookKey: string) => {
+    const ready = (state: ReturnType<typeof useReaderStore.getState>) => {
+      const vs = state.viewStates[bookKey];
+      const ok = !!vs?.inited && !!vs?.view && !!state.getProgress(bookKey);
+      return { done: !!vs?.error || ok, ok };
+    };
+    const initial = ready(useReaderStore.getState());
+    if (initial.done) {
+      if (initial.ok) eventDispatcher.dispatch('tts-speak', { bookKey });
+      return;
+    }
+    const onReady = () => {
+      const { done, ok } = ready(useReaderStore.getState());
+      if (!done) return;
+      unsubscribeView();
+      unsubscribeProgress();
+      if (ok) eventDispatcher.dispatch('tts-speak', { bookKey });
+    };
+    const unsubscribeView = useReaderStore.subscribe(onReady);
+    const unsubscribeProgress = useReaderProgressStore.subscribe(onReady);
+  };
+
   // Open a book in-place when a widget/deep link targets a book while a reader
   // is already mounted. REPLACE the open book(s) with the target one (single
   // ids=<hash>) rather than appending: appending produced ids=a+b which, with
@@ -81,10 +122,15 @@ const useBooksManager = () => {
     if (existing) {
       setSideBarBookKey(existing);
       if (cfi) goToCfiWhenReady(existing, cfi);
+      // Cold-restore autoplay: the deep link can land after this book is
+      // already mounted (the app relaunches straight into the reader), and
+      // focusing it leaves bookKeys unchanged — the consumption effect below
+      // never re-runs — so consume the pending request here too.
+      if (consumePendingTTSAutoplay(bookHash)) startTTSWhenReady(existing);
       return;
     }
     const newKey = `${bookHash}-${uniqueId()}`;
-    initViewState(envConfig, bookHash, newKey, true);
+    initViewState(envConfig, bookHash, newKey, true).catch(handleOpenError);
     setBookKeys([newKey]);
     setSideBarBookKey(newKey);
     setShouldUpdateSearchParams(true);
@@ -102,6 +148,17 @@ const useBooksManager = () => {
     eventDispatcher.on('open-book-in-reader', handle);
     return () => eventDispatcher.off('open-book-in-reader', handle);
   }, []);
+
+  // Consume an Android Auto cold-resume autoplay request once its book is in the
+  // open set (covers both the in-place open and cold-navigate paths).
+  useEffect(() => {
+    for (const key of bookKeys) {
+      if (consumePendingTTSAutoplay(key.split('-')[0]!)) {
+        startTTSWhenReady(key);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookKeys]);
 
   // Close a book and sync with bookKeys and URL
   const dismissBook = (bookKey: string) => {

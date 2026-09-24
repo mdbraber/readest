@@ -17,6 +17,36 @@ msgstr "Readest"
 msgid "Keeps your KOReader and Readest devices in sync."
 msgstr "Mantiene sincronizados tus dispositivos KOReader y Readest."
 
+msgid "Downloading %1 of %2…"
+msgstr "Descargando %1 de %2…"
+
+msgid "%1 MB downloaded"
+msgstr "%1 MB descargados"
+
+msgid "No downloads in progress."
+msgstr "No hay descargas en curso."
+
+msgid "Run in background"
+msgstr "Ejecutar en segundo plano"
+
+msgid "Cancel download"
+msgstr "Cancelar descarga"
+
+msgid "Download cancelled. %1 of %2 downloaded."
+msgstr "Descarga cancelada. %1 de %2 descargados."
+
+msgid "Downloaded %1 of %2 (skipped %3)."
+msgstr "%1 de %2 descargados (%3 omitidos)."
+
+msgid "Downloaded %1 of %2."
+msgstr "%1 de %2 descargados."
+
+msgid "Set Home folder in File Manager first to enable downloads."
+msgstr "Configura primero la carpeta de inicio en el gestor de archivos para habilitar las descargas."
+
+msgid "No books to download."
+msgstr "No hay libros para descargar."
+
 msgid "Library view"
 msgstr "Vista de biblioteca"
 
@@ -68,8 +98,14 @@ msgstr "Ascendente"
 msgid "Actions"
 msgstr "Acciones"
 
+msgid "Sync now"
+msgstr "Sincronizar ahora"
+
 msgid "Download all books"
 msgstr "Descargar todos los libros"
+
+msgid "Download progress"
+msgstr "Progreso de descarga"
 
 msgid "Rescan library"
 msgstr "Reescanear biblioteca"
@@ -104,6 +140,12 @@ msgstr "Buscar en la biblioteca"
 msgid "Search title or author"
 msgstr "Buscar título o autor"
 
+msgid "Books synced"
+msgstr "Libros sincronizados"
+
+msgid "Books sync failed"
+msgstr "Sincronización de libros fallida"
+
 msgid "Cover Browser plugin required for full Library rendering. Falling back to plain list."
 msgstr "Se requiere el complemento Cover Browser para la representación completa de la biblioteca. Volviendo a lista simple."
 
@@ -116,18 +158,6 @@ msgstr "¿Descargar este libro de Readest?"
 msgid "Download"
 msgstr "Descargar"
 
-msgid "Set Home folder in File Manager first to enable downloads."
-msgstr "Configura primero la carpeta de inicio en el gestor de archivos para habilitar las descargas."
-
-msgid "Downloading…"
-msgstr "Descargando…"
-
-msgid "Cloud copy unavailable."
-msgstr "Copia en la nube no disponible."
-
-msgid "Download failed."
-msgstr "Descarga fallida."
-
 msgid "No cover available on Readest."
 msgstr "No hay portada disponible en Readest."
 
@@ -137,20 +167,8 @@ msgstr "Falló la descarga de la portada."
 msgid "Could not delete the file."
 msgstr "No se pudo eliminar el archivo."
 
-msgid "No books to download."
-msgstr "No hay libros para descargar."
-
-msgid "Downloading %1 of %2…"
-msgstr "Descargando %1 de %2…"
-
-msgid "Download cancelled. %1 of %2 downloaded."
-msgstr "Descarga cancelada. %1 de %2 descargados."
-
-msgid "Downloaded %1 of %2 (skipped %3)."
-msgstr "%1 de %2 descargados (%3 omitidos)."
-
-msgid "Downloaded %1 of %2."
-msgstr "%1 de %2 descargados."
+msgid "Download group"
+msgstr "Descargar grupo"
 
 msgid "Removing from cloud…"
 msgstr "Eliminando de la nube…"
@@ -190,6 +208,9 @@ msgstr "Cuota de almacenamiento superada."
 
 msgid "Upload failed."
 msgstr "Subida fallida."
+
+msgid "Send to nearby Readest devices"
+msgstr "Enviar a dispositivos Readest cercanos"
 
 msgid "Download Book"
 msgstr "Descargar libro"
@@ -233,8 +254,11 @@ msgstr "Enviar anotaciones de Readest desde este dispositivo"
 msgid "Pull readest annotations from other devices"
 msgstr "Obtener anotaciones de Readest de otros dispositivos"
 
-msgid "Add to Readest"
-msgstr "Añadir a Readest"
+msgid "Full sync all readest annotations"
+msgstr "Sincronizar completamente todas las anotaciones de Readest"
+
+msgid "Add to Readest library"
+msgstr "Añadir a la biblioteca de Readest"
 
 msgid "Sign in to Readest first."
 msgstr "Inicia sesión en Readest primero."
@@ -257,6 +281,12 @@ msgstr "Ya está en tu biblioteca de Readest:"
 msgid "Added to Readest:"
 msgstr "Añadido a Readest:"
 
+msgid "No book is open"
+msgstr "Ningún libro abierto"
+
+msgid "Uploaded to Readest:"
+msgstr "Subido a Readest:"
+
 msgid "Log in Readest Account"
 msgstr "Iniciar sesión en la cuenta Readest"
 
@@ -275,17 +305,14 @@ msgstr "Enviar estadísticas ahora"
 msgid "Pull stats now"
 msgstr "Obtener estadísticas ahora"
 
-msgid "Push books now"
-msgstr "Enviar libros ahora"
-
-msgid "Pull books now"
-msgstr "Obtener libros ahora"
-
 msgid "Push reading progress now"
 msgstr "Enviar progreso de lectura ahora"
 
 msgid "Pull reading progress now"
 msgstr "Obtener progreso de lectura ahora"
+
+msgid "Upload current book to Readest"
+msgstr "Subir el libro actual a Readest"
 
 msgid "Push annotations now"
 msgstr "Enviar anotaciones ahora"
@@ -299,6 +326,9 @@ msgstr "Sincronizar completamente todas las anotaciones"
 msgid "Sync info"
 msgstr "Información de sincronización"
 
+msgid "Receive via Nearby BookDrop"
+msgstr "Recibir mediante Nearby BookDrop"
+
 msgid "Check for update (v%1)"
 msgstr "Buscar actualización (v%1)"
 
@@ -310,9 +340,6 @@ msgstr "Por favor inicia sesión primero"
 
 msgid "Please configure Readest settings first"
 msgstr "Configura primero los ajustes de Readest"
-
-msgid "No book is open"
-msgstr "Ningún libro abierto"
 
 msgid "(none)"
 msgstr "(ninguno)"
@@ -335,11 +362,89 @@ msgstr "Información de sincronización"
 msgid "Library not initialized"
 msgstr "Biblioteca no inicializada"
 
-msgid "Books synced"
-msgstr "Libros sincronizados"
+msgid "Set a Readest download folder or a KOReader home folder first."
+msgstr "Primero define una carpeta de descargas de Readest o una carpeta de inicio de KOReader."
 
-msgid "Books sync failed"
-msgstr "Sincronización de libros fallida"
+msgid "Nearby BookDrop error: could not find a free port."
+msgstr "Error de Nearby BookDrop: no se encontró un puerto libre."
+
+msgid "Nearby BookDrop failed to start."
+msgstr "No se pudo iniciar Nearby BookDrop."
+
+msgid "Starting Nearby BookDrop…"
+msgstr "Iniciando Nearby BookDrop…"
+
+msgid "Nearby BookDrop will start when Wi-Fi connects."
+msgstr "Nearby BookDrop se iniciará cuando se conecte el Wi-Fi."
+
+msgid "… and %1 more"
+msgstr "… y %1 más"
+
+msgid "%1 wants to send you %2 file(s) (%3):"
+msgstr "%1 quiere enviarte %2 archivo(s) (%3):"
+
+msgid "Accept"
+msgstr "Aceptar"
+
+msgid "Decline"
+msgstr "Rechazar"
+
+msgid "Receiving %1 file(s) from %2…"
+msgstr "Recibiendo %1 archivo(s) de %2…"
+
+msgid "Nearby BookDrop: received %1 file(s), %2 failed."
+msgstr "Nearby BookDrop: %1 archivo(s) recibido(s), %2 con error."
+
+msgid "Nearby BookDrop transfer cancelled."
+msgstr "Transferencia de Nearby BookDrop cancelada."
+
+msgid "Nearby BookDrop: received %1 file(s)."
+msgstr "Nearby BookDrop: %1 archivo(s) recibido(s)."
+
+msgid "Nearby BookDrop not available on this device"
+msgstr "Nearby BookDrop no disponible en este dispositivo"
+
+msgid "Scanning for nearby devices…"
+msgstr "Buscando dispositivos cercanos…"
+
+msgid "No nearby devices found. Make sure the other device has Nearby BookDrop or LocalSend open."
+msgstr "No se encontraron dispositivos cercanos. Asegúrate de que el otro dispositivo tenga Nearby BookDrop o LocalSend abierto."
+
+msgid "Rescan"
+msgstr "Volver a buscar"
+
+msgid "Send to…"
+msgstr "Enviar a…"
+
+msgid "Sending…"
+msgstr "Enviando…"
+
+msgid "Sending… %1%"
+msgstr "Enviando… %1%"
+
+msgid "Sent %1 file(s)."
+msgstr "%1 archivo(s) enviado(s)."
+
+msgid "The other device declined the transfer."
+msgstr "El otro dispositivo rechazó la transferencia."
+
+msgid "Transfer cancelled."
+msgstr "Transferencia cancelada."
+
+msgid "Send failed: %1"
+msgstr "Error al enviar: %1"
+
+msgid "Nearby BookDrop error: %1"
+msgstr "Error de Nearby BookDrop: %1"
+
+msgid "Nearby BookDrop off"
+msgstr "Nearby BookDrop desactivado"
+
+msgid "Visible as %1"
+msgstr "Visible como %1"
+
+msgid "(limited discovery)"
+msgstr "(detección limitada)"
 
 msgid "Checking for update…"
 msgstr "Buscando actualización…"
