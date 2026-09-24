@@ -271,6 +271,21 @@ impl SwiftLinker {
                 // Where the artifacts will be generated to
                 .args(["--build-path", &out_path.display().to_string()]);
 
+            // FORK PATCH (Xcode 27 / Swift 6.4): the default Swift Build engine
+            // prelinks each package into one object and turns non-public
+            // symbols local — including the `@_cdecl` entry points
+            // (`init_plugin_*`) Rust links against — so the app fails with
+            // "Undefined symbols". Ask for the native build system whenever
+            // this toolchain offers the choice; older toolchains only have it.
+            let offers_build_system = Command::new("swift")
+                .args(["build", "--help"])
+                .output()
+                .map(|out| String::from_utf8_lossy(&out.stdout).contains("--build-system"))
+                .unwrap_or(false);
+            if offers_build_system {
+                command.args(["--build-system", "native"]);
+            }
+
             // Xcode's script phases export SDKROOT for the *product* platform
             // (e.g. iphoneos), which leaks into SPM's manifest compilation —
             // the manifest must always build for the host — and breaks it with
@@ -292,7 +307,44 @@ impl SwiftLinker {
                     .then(|| "-simulator".to_string())
                     .unwrap_or_default()
             );
-            let search_path = out_path.join(triple_dir).join(configuration);
+            // FORK PATCH (Xcode 27): SwiftPM there builds through the Swift
+            // Build system, which writes products Xcode-style to
+            // `out/Products/<Configuration>-<platform>` (e.g. Release-iphoneos)
+            // instead of `<triple>/<configuration>`. Link against whichever
+            // layout this toolchain produced, and fail clearly if neither has
+            // the library rather than with rustc's "could not find native
+            // static library".
+            let capitalized_configuration = {
+                let mut chars = configuration.chars();
+                chars
+                    .next()
+                    .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
+                    .unwrap_or_default()
+            };
+            let platform_dir = match rust_target.sdk {
+                SwiftSDK::IOS => Some("iphoneos"),
+                SwiftSDK::IOSSimulator => Some("iphonesimulator"),
+                _ => None,
+            };
+            let mut candidates = vec![out_path.join(&triple_dir).join(configuration)];
+            // Swift Build nests its products under `<build-path>/out/Products`.
+            for products in [out_path.join("out").join("Products"), out_path.join("Products")] {
+                if let Some(platform) = platform_dir {
+                    candidates
+                        .push(products.join(format!("{capitalized_configuration}-{platform}")));
+                }
+                candidates.push(products.join(&capitalized_configuration));
+            }
+            let library = format!("lib{}.a", package.name);
+            let search_path = candidates
+                .iter()
+                .find(|dir| dir.join(&library).is_file())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "swift build succeeded but {library} was not found in any of: {:?}",
+                        candidates
+                    )
+                });
 
             println!("cargo:rerun-if-changed={}", package_path.display());
             println!("cargo:rustc-link-search=native={}", search_path.display());
