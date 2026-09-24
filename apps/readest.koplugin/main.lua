@@ -63,7 +63,6 @@ ReadestSync.default_settings = {
     supabase_url = DEFAULT_SUPABASE_URL,
     supabase_anon_key = DEFAULT_SUPABASE_ANON_KEY,
     auto_sync = false,
-    pull_on_resume = false,
     sync_progress_backwards = false,
     user_email = nil,
     user_name = nil,
@@ -100,6 +99,12 @@ function ReadestSync:init()
     -- Back-fill any keys added to default_settings that are absent from the
     -- stored table (e.g. api_base_url for users upgrading from an older version).
     local settings_changed = false
+    -- Removed: pull_on_resume. Auto sync now pulls on open, wake and reconnect
+    -- (scheduleBackgroundPull), which is what that separate toggle did.
+    if self.settings.pull_on_resume ~= nil then
+        self.settings.pull_on_resume = nil
+        settings_changed = true
+    end
     for k, v in pairs(self.default_settings) do
         if self.settings[k] == nil then
             self.settings[k] = v
@@ -161,7 +166,7 @@ function ReadestSync:onDispatcherRegisterReaderActions()
 end
 
 function ReadestSync:onReaderReady()
-    if self.settings.access_token and (self.settings.auto_sync or self.settings.pull_on_resume) then
+    if self.settings.auto_sync and self.settings.access_token then
         self._refresh_retries = 0
         self._refresh_retry_scheduled = false
         -- Defer the per-book pull so the reader is interactive first (issue #5006).
@@ -630,14 +635,6 @@ function ReadestSync:addToMainMenu(menu_items)
                 checked_func = function() return self.settings.auto_sync end,
                 callback = function()
                     self:onReadestSyncToggleAutoSync()
-                end,
-            },
-            {
-                text = _("Pull on resume"),
-                checked_func = function() return self.settings.pull_on_resume end,
-                callback = function()
-                    self.settings.pull_on_resume = not self.settings.pull_on_resume
-                    G_reader_settings:saveSetting("readest_sync", self.settings)
                 end,
             },
             {
@@ -1278,8 +1275,7 @@ function ReadestSync:onResume()
     if self.localsend and self.settings.localsend_enabled and NetworkMgr:isConnected() then
         self.localsend:startService()
     end
-    if not ((self.settings.auto_sync or self.settings.pull_on_resume)
-            and self.settings.access_token and self.ui.document) then
+    if not (self.settings.auto_sync and self.settings.access_token and self.ui.document) then
         return
     end
     local now = os.time()
@@ -1317,8 +1313,7 @@ function ReadestSync:onNetworkConnected()
     if not self.pull_pending_offline then
         return
     end
-    if not ((self.settings.auto_sync or self.settings.pull_on_resume)
-            and self.settings.access_token and self.ui.document) then
+    if not (self.settings.auto_sync and self.settings.access_token and self.ui.document) then
         return
     end
     self.pull_pending_offline = nil

@@ -428,7 +428,16 @@ function SyncConfig:pull(ui, settings, client, book_hash, meta_hash, interactive
 
             local data = response.configs
             if data and #data > 0 then
+                -- The pull matches this file's hash OR its metadata hash, so it
+                -- can return rows for other copies of the book. Prefer the row
+                -- for this exact file: its xpointer addresses these bytes.
                 local config = data[1]
+                for _, row in ipairs(data) do
+                    if row.book_hash == book_hash then
+                        config = row
+                        break
+                    end
+                end
                 if config then
                     -- Position-author timestamps decide newness (mirrors the web's
                     -- lastSyncedProgressTs): compare the server's progress_updated_at
