@@ -1,5 +1,6 @@
 import type { PrecacheEntry, SerwistGlobalConfig } from 'serwist';
 import { NetworkFirst, CacheFirst, ExpirationPlugin, Serwist } from 'serwist';
+import { isCacheablePageNavigation, resolveOfflineNavigation } from './utils/offlineNavigation';
 
 declare global {
   interface WorkerGlobalScope extends SerwistGlobalConfig {
@@ -27,12 +28,11 @@ const serwist = new Serwist({
   },
   runtimeCaching: [
     {
-      matcher: ({ url, request }) => {
-        // Catch ALL same-origin navigations (not just /library and /reader)
-        // so the offline fallback chain below can rescue any URL — including
-        // root `/` which the user lands on when launching the PWA offline.
-        return request.mode === 'navigate' && url.origin === self.location.origin;
-      },
+      matcher: ({ url, request }) =>
+        // Same-origin page navigations (not just /library and /reader), so the
+        // offline fallback below can rescue any page — including root `/`,
+        // where the PWA lands when launched offline.
+        isCacheablePageNavigation(url, request.mode, self.location.origin),
       handler: new NetworkFirst({
         cacheName: 'client-pages',
         networkTimeoutSeconds: 3,
@@ -53,29 +53,12 @@ const serwist = new Serwist({
             },
           },
           {
-            // Hard fallback chain so navigations never end up as
-            // FetchEvent.respondWith no-response (the Safari "can't open the
-            // page" error). Tries: any /library cache, any /reader cache,
-            // any precached document, finally a synthetic Response.
-            handlerDidError: async () => {
-              const candidates = [
-                'https://readest.nidere.com/library',
-                'https://readest.nidere.com/reader',
-                'https://readest.nidere.com/',
-                '/offline',
-              ];
-              for (const url of candidates) {
-                const r = await caches.match(url, { ignoreSearch: true });
-                if (r) return r;
-              }
-              return new Response(
-                '<!doctype html><meta charset=utf-8><title>Offline</title>' +
-                  '<style>body{font:14px system-ui;padding:2em;color:#888;text-align:center}</style>' +
-                  '<p>You are offline and this page has not been cached yet.</p>' +
-                  '<p>Open Wi-Fi and reload to populate the cache.</p>',
-                { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
-              );
-            },
+            // Never let a navigation end in FetchEvent.respondWith with no
+            // response (Safari's "can't open the page"); see offlineNavigation.
+            handlerDidError: async ({ request }) =>
+              resolveOfflineNavigation(request.url, self.location.origin, (url) =>
+                caches.match(url, { ignoreSearch: true }),
+              ),
           },
         ],
       }),
