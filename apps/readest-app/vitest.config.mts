@@ -3,6 +3,15 @@ import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
+// Node 25+ ships its own global `localStorage`, which is unusable without
+// `--localstorage-file` and shadows jsdom's — so every test touching storage
+// fails. Turn Node's off in the test workers wherever the flag exists (Node
+// 22.4+); older runtimes never had the global.
+const nodeWebStorageFlag = '--no-experimental-webstorage';
+const testExecArgv = process.allowedNodeEnvironmentFlags.has(nodeWebStorageFlag)
+  ? [nodeWebStorageFlag]
+  : [];
+
 export default defineConfig({
   plugins: [tsconfigPaths(), react()],
   resolve: {
@@ -24,6 +33,7 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    execArgv: testExecArgv,
     silent: 'passed-only',
     setupFiles: ['./vitest.setup.ts'],
     exclude: [

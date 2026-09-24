@@ -1,3 +1,6 @@
+# Fork: this repository is public — refuse to push secrets, real hostnames or
+# signing identities (see scripts/scan-public-fork-safety.sh).
+bash scripts/scan-public-fork-safety.sh
 pnpm -C apps/readest-app format:check
 pnpm -C apps/readest-app lint
 pnpm -C apps/readest-app test
