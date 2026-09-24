@@ -38,6 +38,8 @@ const h = vi.hoisted(() => {
     syncConfigsMock: vi.fn(async () => {}),
     syncBooksMock: vi.fn(async () => {}),
     saveConfigMock: vi.fn(async () => {}),
+    setConfigMock: vi.fn(),
+    markProgressAdoptionMock: vi.fn(),
     setViewSettingsMock: vi.fn(),
     recreateViewerMock: vi.fn(),
     cfiCompareMock: vi.fn((_a: string, _b: string) => 0),
@@ -80,10 +82,14 @@ vi.mock('@/context/EnvContext', () => ({
   useEnv: () => ({ envConfig: {} }),
 }));
 
+vi.mock('@/store/progressWatermark', () => ({
+  markProgressAdoption: h.markProgressAdoptionMock,
+}));
+
 vi.mock('@/store/bookDataStore', () => ({
   useBookDataStore: h.makeStore({
     getConfig: () => h.config,
-    setConfig: vi.fn(),
+    setConfig: h.setConfigMock,
     saveConfig: h.saveConfigMock,
     getBookData: () => ({ book: h.book, bookDoc: h.state.bookDoc }),
   }),
@@ -174,6 +180,8 @@ beforeEach(() => {
   h.syncConfigsMock.mockClear();
   h.syncBooksMock.mockClear();
   h.saveConfigMock.mockClear();
+  h.setConfigMock.mockClear();
+  h.markProgressAdoptionMock.mockClear();
   h.setViewSettingsMock.mockClear();
   h.recreateViewerMock.mockClear();
   h.view.goTo.mockClear();
@@ -235,9 +243,7 @@ describe('useProgressSync', () => {
     expect((push?.[0] as unknown[])?.[0]).not.toHaveProperty('audiobook');
   });
 
-  // Fork: skipped — upstream's pull-retry/resume-pull chain was replaced by the
-  // fork's progressUpdatedAt watermark + sync-on-focus design.
-  test.skip('retries the first pull on failure with backoff, then releases the gate', async () => {
+  test('retries the first pull on failure with backoff, then releases the gate', async () => {
     // Pull failure is simulated by a mock that resolves without ever flipping
     // h.state.syncedConfigs to a non-null array — the same observable state
     // as a real pullChanges that threw and skipped setSyncResult. Without
@@ -337,9 +343,7 @@ describe('useProgressSync', () => {
     }
   });
 
-  // Fork: skipped — upstream's pull-retry/resume-pull chain was replaced by the
-  // fork's progressUpdatedAt watermark + sync-on-focus design.
-  test.skip('sync-book-progress event resets and re-runs the pull chain', async () => {
+  test('sync-book-progress event resets and re-runs the pull chain', async () => {
     h.state.syncedConfigs = null;
     renderHook(() => useProgressSync('h1-view1'));
 
@@ -364,9 +368,7 @@ describe('useProgressSync', () => {
     expect(pullCallCount()).toBe(callsBeforeRefresh + 2);
   });
 
-  // Fork: skipped — upstream's pull-retry/resume-pull chain was replaced by the
-  // fork's progressUpdatedAt watermark + sync-on-focus design.
-  test.skip('resuming an open book pulls and applies progress read on another device', async () => {
+  test('resuming an open book pulls and applies progress read on another device', async () => {
     const { rerender } = renderHook(() => useProgressSync('h1-view1'));
     await advance(0);
     const initialPulls = pullCallCount();
@@ -394,7 +396,9 @@ describe('useProgressSync', () => {
       // A new response must be applied even though the book's initial pull
       // already succeeded before the app went into the background.
       h.cfiCompareMock.mockReturnValue(-1);
-      h.state.syncedConfigs = [{ bookHash: 'h1', location: 'remote-ahead' }];
+      // Server rows always carry updatedAt (and, from this fork on,
+      // progressUpdatedAt); this one was authored after the local position.
+      h.state.syncedConfigs = [{ bookHash: 'h1', location: 'remote-ahead', updatedAt: 3000 }];
       rerender();
       await advance(0);
       expect(h.view.goTo).toHaveBeenCalledWith('remote-ahead');
@@ -405,9 +409,7 @@ describe('useProgressSync', () => {
     }
   });
 
-  // Fork: skipped — upstream's pull-retry/resume-pull chain was replaced by the
-  // fork's progressUpdatedAt watermark + sync-on-focus design.
-  test.skip('foreground pull retries after a failed request and cleans up on unmount', async () => {
+  test('foreground pull retries after a failed request and cleans up on unmount', async () => {
     const { unmount } = renderHook(() => useProgressSync('h1-view1'));
     await advance(0);
     const initialPulls = pullCallCount();
@@ -427,9 +429,7 @@ describe('useProgressSync', () => {
   });
 
   for (const responseBeforeCompletion of [true, false]) {
-    // Fork: skipped — upstream's pull-retry/resume-pull chain was replaced by the
-    // fork's progressUpdatedAt watermark + sync-on-focus design.
-    test.skip(`queues a resume pull across an in-flight request (response first: ${responseBeforeCompletion})`, async () => {
+    test(`queues a resume pull across an in-flight request (response first: ${responseBeforeCompletion})`, async () => {
       let finishPull!: () => void;
       h.state.syncedConfigs = null;
       h.syncConfigsMock.mockImplementationOnce(
@@ -468,7 +468,9 @@ describe('useProgressSync', () => {
       expect(pullCallCount()).toBe(2);
 
       h.cfiCompareMock.mockReturnValue(-1);
-      h.state.syncedConfigs = [{ bookHash: 'h1', location: 'remote-after-resume' }];
+      h.state.syncedConfigs = [
+        { bookHash: 'h1', location: 'remote-after-resume', updatedAt: 3000 },
+      ];
       rerender();
       await advance(0);
       expect(h.view.goTo).toHaveBeenCalledWith('remote-after-resume');
@@ -724,5 +726,173 @@ describe('useProgressSync — KOReader-origin config (#5625)', () => {
 
     expect(h.view.goTo).toHaveBeenCalledWith('epubcfi(/6/30!/4/90/1:0)');
     expect(h.view.goToFraction).not.toHaveBeenCalled();
+  });
+  describe('most recently authored position wins', () => {
+    const withLocalAuthoredAt = async (authoredAt: number, fn: () => Promise<void>) => {
+      const config = h.config as { progressUpdatedAt?: number };
+      config.progressUpdatedAt = authoredAt;
+      try {
+        await fn();
+      } finally {
+        delete config.progressUpdatedAt;
+      }
+    };
+
+    test('pulls its own book from the start, not from the last-synced cursor', async () => {
+      renderHook(() => useProgressSync('h1-view1'));
+      await advance(0);
+      const pull = h.syncConfigsMock.mock.calls.find((c) => (c as unknown[])[3] === 'pull');
+      expect((pull as unknown[])[4]).toBe(0);
+    });
+
+    test('moves BACK to a remote position authored later', async () => {
+      // CFI.compare > 0: the remote position is behind the local one. The user
+      // went back on another device; furthest-wins would ignore that.
+      h.cfiCompareMock.mockReturnValue(1);
+      h.state.syncedConfigs = [
+        { bookHash: 'h1', metaHash: 'm1', location: 'remote-behind', progressUpdatedAt: 5000 },
+      ];
+      await withLocalAuthoredAt(4000, async () => {
+        renderHook(() => useProgressSync('h1-view1'));
+        await advance(0);
+      });
+      expect(h.view.goTo).toHaveBeenCalledWith('remote-behind');
+      // The landed position keeps the remote authoring time, not "now".
+      expect(h.markProgressAdoptionMock).toHaveBeenCalledWith('h1', 5000);
+    });
+
+    test('keeps a local position authored later, even if the remote one is ahead', async () => {
+      h.cfiCompareMock.mockReturnValue(-1);
+      h.state.syncedConfigs = [
+        { bookHash: 'h1', metaHash: 'm1', location: 'remote-ahead', progressUpdatedAt: 3000 },
+      ];
+      await withLocalAuthoredAt(4000, async () => {
+        renderHook(() => useProgressSync('h1-view1'));
+        await advance(0);
+      });
+      expect(h.view.goTo).not.toHaveBeenCalled();
+      expect(h.markProgressAdoptionMock).not.toHaveBeenCalled();
+    });
+
+    test('a tie keeps the local position', async () => {
+      h.cfiCompareMock.mockReturnValue(-1);
+      h.state.syncedConfigs = [
+        { bookHash: 'h1', metaHash: 'm1', location: 'remote-ahead', progressUpdatedAt: 4000 },
+      ];
+      await withLocalAuthoredAt(4000, async () => {
+        renderHook(() => useProgressSync('h1-view1'));
+        await advance(0);
+      });
+      expect(h.view.goTo).not.toHaveBeenCalled();
+    });
+
+    test('prefers progressUpdatedAt over the row updatedAt', async () => {
+      // A settings-only change bumped the remote row, not its position.
+      h.cfiCompareMock.mockReturnValue(-1);
+      h.state.syncedConfigs = [
+        {
+          bookHash: 'h1',
+          metaHash: 'm1',
+          location: 'remote-ahead',
+          updatedAt: 9000,
+          progressUpdatedAt: 2000,
+        },
+      ];
+      await withLocalAuthoredAt(4000, async () => {
+        renderHook(() => useProgressSync('h1-view1'));
+        await advance(0);
+      });
+      expect(h.view.goTo).not.toHaveBeenCalled();
+    });
+
+    test('already at the remote position: adopts its time without moving', async () => {
+      h.cfiCompareMock.mockReturnValue(0);
+      h.state.syncedConfigs = [
+        { bookHash: 'h1', metaHash: 'm1', location: 'cfi-loc', progressUpdatedAt: 5000 },
+      ];
+      await withLocalAuthoredAt(4000, async () => {
+        renderHook(() => useProgressSync('h1-view1'));
+        await advance(0);
+      });
+      expect(h.view.goTo).not.toHaveBeenCalled();
+      expect(h.setConfigMock).toHaveBeenCalledWith('h1-view1', { progressUpdatedAt: 5000 });
+    });
+
+    test('a push response carrying a newer remote position moves the reader', async () => {
+      // After the initial pull, the server's reply to a page-turn push is the
+      // authoritative row. When another device moved in the meantime, the
+      // server keeps that newer position and returns it.
+      await withLocalAuthoredAt(4000, async () => {
+        const { rerender } = renderHook(() => useProgressSync('h1-view1'));
+        await advance(0);
+        expect(h.view.goTo).not.toHaveBeenCalled();
+
+        h.cfiCompareMock.mockReturnValue(1);
+        h.state.syncedConfigs = [
+          { bookHash: 'h1', metaHash: 'm1', location: 'moved-elsewhere', progressUpdatedAt: 6000 },
+        ];
+        rerender();
+        await advance(0);
+      });
+      expect(h.view.goTo).toHaveBeenCalledWith('moved-elsewhere');
+    });
+
+    test('a push response echoing our own position changes nothing', async () => {
+      await withLocalAuthoredAt(4000, async () => {
+        const { rerender } = renderHook(() => useProgressSync('h1-view1'));
+        await advance(0);
+        h.cfiCompareMock.mockReturnValue(0);
+        h.state.syncedConfigs = [
+          { bookHash: 'h1', metaHash: 'm1', location: 'cfi-loc', progressUpdatedAt: 4000 },
+        ];
+        rerender();
+        await advance(0);
+      });
+      expect(h.view.goTo).not.toHaveBeenCalled();
+      expect(h.setConfigMock).not.toHaveBeenCalledWith('h1-view1', { progressUpdatedAt: 4000 });
+    });
+
+    test('a sibling copy that is further but authored earlier does not move the reader', async () => {
+      h.state.progress = { location: 'cfi-loc', fraction: 0.1 };
+      h.state.syncedConfigs = [
+        { bookHash: 'other', metaHash: 'm1', progress: [90, 100], progressUpdatedAt: 3000 },
+      ];
+      await withLocalAuthoredAt(4000, async () => {
+        renderHook(() => useProgressSync('h1-view1'));
+        await advance(0);
+      });
+      expect(h.view.goToFraction).not.toHaveBeenCalled();
+    });
+
+    test('a sibling copy that is further and authored later moves by fraction', async () => {
+      h.state.progress = { location: 'cfi-loc', fraction: 0.1 };
+      h.state.syncedConfigs = [
+        { bookHash: 'other', metaHash: 'm1', progress: [90, 100], progressUpdatedAt: 5000 },
+      ];
+      await withLocalAuthoredAt(4000, async () => {
+        renderHook(() => useProgressSync('h1-view1'));
+        await advance(0);
+      });
+      expect(h.view.goToFraction).toHaveBeenCalledWith(0.9);
+    });
+
+    test('reports an unresolvable newer position only once', async () => {
+      h.book.format = 'EPUB';
+      h.getCFIFromXPointerMock.mockRejectedValue(new Error('no such node'));
+      const hints: unknown[] = [];
+      h.eventListeners.set('hint', new Set([(e: CustomEvent) => hints.push(e.detail)]));
+      const row = { bookHash: 'h1', metaHash: 'm1', xpointer: '/body/x', progressUpdatedAt: 5000 };
+      await withLocalAuthoredAt(4000, async () => {
+        h.state.syncedConfigs = [row];
+        const { rerender } = renderHook(() => useProgressSync('h1-view1'));
+        await advance(0);
+        h.state.syncedConfigs = [{ ...row }];
+        rerender();
+        await advance(0);
+      });
+      expect(
+        hints.filter((d) => (d as { message: string }).message === 'Sync failed'),
+      ).toHaveLength(1);
+    });
   });
 });

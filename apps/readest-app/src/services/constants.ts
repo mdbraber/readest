@@ -187,7 +187,6 @@ export const DEFAULT_ICLOUD_SETTINGS = {
 
 export const DEFAULT_SYSTEM_SETTINGS: Partial<SystemSettings> = {
   keepLogin: false,
-  syncOnFocus: true,
   alwaysOnTop: false,
   openBookInNewWindow: true,
   alwaysShowStatusBar: false,

@@ -92,7 +92,14 @@ export const useProgressAutoSave = (bookKey: string) => {
   // FoliateViewer commits the relocate synchronously once the page is hidden.
   useEffect(() => {
     const flush = () => {
-      void persistProgressRef.current();
+      // Persist the position first so the library rollup below carries it;
+      // the throttled library.json write would otherwise be lost to a kill.
+      void persistProgressRef
+        .current()
+        .then(() => flushPendingLibrarySave())
+        .catch(() => {
+          // Best-effort — per-book config.json is the source of truth.
+        });
     };
     const onVisibilityChange = () => {
       if (document.visibilityState === 'hidden') flush();

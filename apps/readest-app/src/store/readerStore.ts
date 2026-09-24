@@ -28,6 +28,7 @@ import { getBaseFilename } from '@/utils/path';
 import { SUPPORTED_LANGNAMES } from '@/services/constants';
 import { useSettingsStore } from './settingsStore';
 import { BookData, useBookDataStore } from './bookDataStore';
+import { seedPersistedProgress } from './progressWatermark';
 import { useLibraryStore } from './libraryStore';
 import { clearBookProgress, getBookProgress, setBookProgress } from './readerProgressStore';
 import { uniqueId } from '@/utils/misc';
@@ -318,6 +319,9 @@ export const useReaderStore = create<ReaderStore>((set, get) => ({
       const isFixedLayout =
         bookDoc.rendition?.layout === 'pre-paginated' || FIXED_LAYOUT_FORMATS.has(book.format);
       const newBookData: BookData = { id, book, file, config, bookDoc, isFixedLayout };
+      // The position just read from disk is the baseline for detecting real
+      // moves (see resolveProgressUpdatedAt).
+      seedPersistedProgress(id, config);
       useBookDataStore.setState((state) => ({
         booksData: {
           ...state.booksData,

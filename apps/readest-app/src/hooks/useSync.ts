@@ -302,7 +302,17 @@ export function useSync(bookKey?: string) {
   );
 
   const syncConfigs = useCallback(
-    async (bookConfigs?: BookConfig[], bookId?: string, metaHash?: string, op: SyncOp = 'both') => {
+    async (
+      bookConfigs?: BookConfig[],
+      bookId?: string,
+      metaHash?: string,
+      op: SyncOp = 'both',
+      // Pull from this cursor instead of the last-synced one. The reader pulls
+      // its own book from 0: it must see the server row even when that row is
+      // older than the cursor, or "no row returned" would read as "nothing on
+      // the server" and a stale local position could win.
+      since?: number,
+    ) => {
       if (!bookId && !lastSyncedAtInited) return;
       if (!isSyncCategoryEnabled('progress')) return;
       if ((op === 'push' || op === 'both') && bookConfigs?.length) {
@@ -314,7 +324,7 @@ export function useSync(bookKey?: string) {
       if (op === 'pull' || op === 'both') {
         await pullChanges(
           'configs',
-          lastSyncedAtConfigs,
+          since ?? lastSyncedAtConfigs,
           setLastSyncedAtConfigs,
           setSyncingConfigs,
           bookId,

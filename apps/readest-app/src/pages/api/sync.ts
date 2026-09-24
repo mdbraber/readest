@@ -269,6 +269,59 @@ type TableName = keyof typeof transformsToDB;
 
 type DBError = { table: TableName; error: PostgrestError };
 
+/** The reading-position columns of a book_configs row, merged as one unit. */
+const CONFIG_POSITION_FIELDS = [
+  'progress',
+  'location',
+  'xpointer',
+  'rsvp_position',
+  'progress_updated_at',
+] as const;
+
+/** When the row's reading position was authored; legacy rows fall back to updated_at. */
+const configPositionAt = (r: DBBookConfig) => ms(r.progress_updated_at || r.updated_at);
+
+const configPositionDiffers = (a: DBBookConfig, b: DBBookConfig) =>
+  CONFIG_POSITION_FIELDS.some(
+    (field) => field !== 'progress_updated_at' && (a[field] ?? null) !== (b[field] ?? null),
+  );
+
+const withPositionFrom = (row: DBBookConfig, source: DBBookConfig): DBBookConfig => {
+  // Copy nulls too: a position without an xpointer must clear the other's.
+  const merged: Record<string, unknown> = { ...row };
+  for (const field of CONFIG_POSITION_FIELDS) merged[field] = source[field] ?? null;
+  return merged as unknown as DBBookConfig;
+};
+
+/**
+ * Field-level merge for a book_configs push. The row as a whole is decided by
+ * updated_at (ties → server), but the reading position is decided on its own
+ * clock, progress_updated_at (ties → client): whichever device AUTHORED its
+ * position later keeps it, independent of who touched the rest of the row.
+ * Without this, a settings change on one device (newer updated_at) would
+ * overwrite a newer position from another, and an offline device coming back
+ * with an old row would lose the position it moved to while offline.
+ *
+ * Returns the row to write, or null when the server row stands unchanged.
+ * When the server row wins but the client's position is grafted onto it,
+ * updated_at is stamped `nowIso` so peers pulling by updated_at see the change.
+ */
+export function resolveConfigPositionMerge(
+  client: DBBookConfig,
+  server: DBBookConfig,
+  clientRowIsNewer: boolean,
+  nowIso: string,
+): DBBookConfig | null {
+  const clientPositionWins = configPositionAt(client) >= configPositionAt(server);
+  if (clientRowIsNewer) {
+    return clientPositionWins ? client : withPositionFrom(client, server);
+  }
+  if (clientPositionWins && configPositionDiffers(client, server)) {
+    return { ...withPositionFrom(server, client), updated_at: nowIso };
+  }
+  return null;
+}
+
 export async function GET(req: NextRequest) {
   const { user, token } = await validateUserAndToken(req.headers.get('authorization'));
   if (!user || !token) {
@@ -823,6 +876,15 @@ export async function POST(req: NextRequest) {
                 batchAuthoritativeRecords.push(serverData);
               }
             }
+          } else if (table === 'book_configs') {
+            const merged = resolveConfigPositionMerge(
+              dbRec as DBBookConfig,
+              serverData as unknown as DBBookConfig,
+              clientIsNewer,
+              new Date().toISOString(),
+            );
+            if (merged) toUpdate.push(merged);
+            else batchAuthoritativeRecords.push(serverData);
           } else if (clientIsNewer) {
             toUpdate.push(dbRec);
           } else {
@@ -845,40 +907,11 @@ export async function POST(req: NextRequest) {
         batchAuthoritativeRecords.push(...(inserted || []));
       }
 
-      // Batch upsert (with per-field merge for book_configs to protect reading position)
+      // Batch upsert
       if (toUpdate.length > 0) {
-        let finalToUpdate = toUpdate;
-        if (table === 'book_configs') {
-          finalToUpdate = toUpdate.map((dbRec) => {
-            const cfg = dbRec as DBBookConfig;
-            const cfgKey = primaryKeys
-              .map((pk) => (cfg as unknown as Record<string, string>)[pk])
-              .join('|');
-            const serverData = serverRecordsMap.get(cfgKey) as DBBookConfig | undefined;
-            if (!serverData) return dbRec;
-            // Resolve position timestamps: prefer progress_updated_at, fallback to updated_at
-            const clientProgTs = new Date(cfg.progress_updated_at || cfg.updated_at || 0).getTime();
-            const serverProgTs = new Date(
-              serverData.progress_updated_at || serverData.updated_at || 0,
-            ).getTime();
-            const serverPositionNewer = serverProgTs > clientProgTs;
-            if (serverPositionNewer) {
-              // Keep server's reading position; client's other fields can still win
-              return {
-                ...cfg,
-                progress: serverData.progress,
-                location: serverData.location,
-                xpointer: serverData.xpointer,
-                rsvp_position: serverData.rsvp_position,
-                progress_updated_at: serverData.progress_updated_at,
-              };
-            }
-            return dbRec;
-          });
-        }
         const { data: updated, error: updateError } = await supabase
           .from(table)
-          .upsert(finalToUpdate, {
+          .upsert(toUpdate, {
             onConflict: ['user_id', ...primaryKeys].join(','),
           })
           .select();
@@ -914,6 +947,9 @@ export async function POST(req: NextRequest) {
     // re-pushes. The .lt('updated_at') predicate keeps last-writer-wins —
     // a concurrent newer books push is never downgraded — and a missing
     // row is a silent no-op (useBooksSync will insert it later).
+    // Fork: stamp books.updated_at with when the POSITION was authored
+    // (progress_updated_at), not the row's updated_at — a settings-only push or
+    // a server-side position graft must not look like a fresh read.
     type BookProgressUpdate = {
       book_hash: string;
       progress: [number, number];
@@ -939,7 +975,7 @@ export async function POST(req: NextRequest) {
       bookProgressUpdates.push({
         book_hash: rec.book_hash,
         progress: [parsed[0], parsed[1]],
-        updated_at: rec.updated_at,
+        updated_at: rec.progress_updated_at || rec.updated_at,
       });
     }
 

@@ -431,7 +431,6 @@ export interface SystemSettings {
   autoImportFlattenFolders?: string[];
 
   keepLogin: boolean;
-  syncOnFocus: boolean;
   alwaysOnTop: boolean;
   openBookInNewWindow: boolean;
   autoCheckUpdates: boolean;

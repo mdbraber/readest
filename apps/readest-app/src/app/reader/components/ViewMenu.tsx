@@ -59,8 +59,7 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
   const { user } = useAuth();
   const { envConfig, appService } = useEnv();
   const { getConfig, getBookData } = useBookDataStore();
-  const { settings, setSettings, saveSettings, setSettingsDialogOpen, setSettingsDialogBookKey } =
-    useSettingsStore();
+  const { setSettingsDialogOpen, setSettingsDialogBookKey } = useSettingsStore();
   const { getView, getViewSettings, getViewState, getProgress, setViewSettings, recreateViewer } =
     useReaderStore();
   const config = getConfig(bookKey)!;
@@ -156,12 +155,6 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
     // BookOrbit may be in manual mode (#6029), where nothing is ever pending
     // and the flush above does nothing, so ask it for a real push.
     eventDispatcher.dispatch('push-kosync', { bookKey, provider: 'bookorbit' });
-  };
-
-  const toggleSyncOnFocus = () => {
-    const updated = { ...settings, syncOnFocus: !settings.syncOnFocus };
-    setSettings(updated);
-    saveSettings(envConfig, updated);
   };
 
   const handleStartRSVP = () => {
@@ -571,14 +564,6 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
           </button>
         }
       />
-
-      {user && (
-        <MenuItem
-          label={_('Sync on focus')}
-          Icon={settings.syncOnFocus ? MdCheck : undefined}
-          onClick={toggleSyncOnFocus}
-        />
-      )}
 
       <hr aria-hidden='true' className='border-base-300 my-1' />
 
