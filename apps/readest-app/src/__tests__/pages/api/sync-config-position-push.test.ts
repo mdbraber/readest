@@ -121,6 +121,13 @@ describe('POST /api/sync book_configs position merge', () => {
     expect(body.configs[0]!['location']).toBe('SERVER');
   });
 
+  it('a push with position time 0 (never authored) cannot beat a stamped server position', async () => {
+    state.serverRows = [serverRow('SERVER', 1000, 1000)];
+    const { body } = await post({ configs: [clientConfig('PAGE-ONE', 9000, 0)] });
+    expect(state.upserts[0]![0]!['location']).toBe('SERVER');
+    expect(body.configs[0]!['location']).toBe('SERVER');
+  });
+
   it('stamps the books row with the position authoring time, not the row time', async () => {
     state.serverRows = [serverRow('SERVER', 1000, 1000)];
     await post({ configs: [clientConfig('CLIENT', 9000, 4000)] });

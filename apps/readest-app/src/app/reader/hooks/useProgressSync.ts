@@ -35,11 +35,18 @@ const getConfigFraction = (config: BookConfig): number | undefined => {
   return Number.isFinite(fraction) ? Math.min(fraction, 1) : undefined;
 };
 
-// When the reading position `config` holds was authored (see
-// bookDataStore's resolveProgressUpdatedAt). Rows written before the
-// progressUpdatedAt watermark existed fall back to the row's updatedAt.
+// When a SERVER row's reading position was authored. Rows written before the
+// progressUpdatedAt watermark existed fall back to the row's updatedAt (the
+// server backfills it the same way).
 const getAuthoredAt = (config: BookConfig | null | undefined): number | undefined =>
   config?.progressUpdatedAt ?? config?.updatedAt;
+
+// When THIS device authored the position it holds (see progressWatermark).
+// No fallback to updatedAt: importing, annotating or changing settings bumps
+// that without authoring a position, and would make a book never read here
+// look newer than a real position from another device.
+const getLocalAuthoredAt = (config: BookConfig | null | undefined): number | undefined =>
+  config?.progressUpdatedAt;
 
 // Reading positions sync by "most recently authored wins": a remote position
 // moves this device only when it was authored after the local one — whether it
@@ -107,6 +114,11 @@ export const useProgressSync = (bookKey: string) => {
     );
     delete compressedConfig.booknotes;
     delete compressedConfig.audiobook;
+    // No position authored on this device yet: say so with the oldest possible
+    // time. Leaving it out would make the server fall back to the row's
+    // updatedAt, so a just-opened book's first page could beat a real position
+    // from another device.
+    compressedConfig.progressUpdatedAt = config.progressUpdatedAt ?? 0;
     // The /api/sync POST handler piggybacks books.progress + books.updated_at
     // off this configs push (saves the separate syncBooks round-trip that
     // used to keep the library record fresh while a reader stayed open —
@@ -328,7 +340,7 @@ export const useProgressSync = (bookKey: string) => {
       const siblingFraction = bestSibling ? (getConfigFraction(bestSibling) ?? 0) : 0;
       // Authoring time of the position this device currently holds. Read live:
       // a page turned while the pull was in flight must count.
-      const localAuthoredAt = getAuthoredAt(getConfig(bookKey));
+      const localAuthoredAt = getLocalAuthoredAt(getConfig(bookKey));
       const exactFraction = exactConfig ? (getConfigFraction(exactConfig) ?? 0) : 0;
       const localFraction = getBookProgress(bookKey)?.fraction ?? getConfigFraction(config) ?? 0;
 

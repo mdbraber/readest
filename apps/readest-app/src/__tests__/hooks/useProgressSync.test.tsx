@@ -738,6 +738,46 @@ describe('useProgressSync — KOReader-origin config (#5625)', () => {
       }
     };
 
+    test('a book never read here takes a remote position even if the config was touched later', async () => {
+      // Freshly imported (or annotated) on this device: the config's updatedAt
+      // is newer than the remote position, but no position was ever authored
+      // here, so the remote one must win.
+      const config = h.config as { updatedAt: number };
+      const saved = config.updatedAt;
+      config.updatedAt = 9000;
+      h.cfiCompareMock.mockReturnValue(-1);
+      h.state.syncedConfigs = [
+        { bookHash: 'h1', metaHash: 'm1', location: 'remote-pos', progressUpdatedAt: 5000 },
+      ];
+      try {
+        renderHook(() => useProgressSync('h1-view1'));
+        await advance(0);
+      } finally {
+        config.updatedAt = saved;
+      }
+      expect(h.view.goTo).toHaveBeenCalledWith('remote-pos');
+    });
+
+    test('pushes position time 0 when no position was authored here', async () => {
+      renderHook(() => useProgressSync('h1-view1'));
+      await flushAutoSync();
+      const push = h.syncConfigsMock.mock.calls.find((c) => (c as unknown[])[3] === 'push');
+      expect(
+        ((push as unknown[])[0] as { progressUpdatedAt?: number }[])[0]!.progressUpdatedAt,
+      ).toBe(0);
+    });
+
+    test('pushes the local authoring time when there is one', async () => {
+      await withLocalAuthoredAt(4000, async () => {
+        renderHook(() => useProgressSync('h1-view1'));
+        await flushAutoSync();
+      });
+      const push = h.syncConfigsMock.mock.calls.find((c) => (c as unknown[])[3] === 'push');
+      expect(
+        ((push as unknown[])[0] as { progressUpdatedAt?: number }[])[0]!.progressUpdatedAt,
+      ).toBe(4000);
+    });
+
     test('pulls its own book from the start, not from the last-synced cursor', async () => {
       renderHook(() => useProgressSync('h1-view1'));
       await advance(0);
