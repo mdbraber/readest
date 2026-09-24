@@ -1,5 +1,5 @@
 // Stub for excluding optional native deps from web builds (tauri-plugin-turso)
-// and desktop builds (@tursodatabase/database-wasm). This module should never
+// and desktop builds (@readest/turso-database-wasm/webpack). This module should never
 // be invoked at runtime — Database.load throws if it ever is.
 
 export interface QueryResult {

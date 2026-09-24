@@ -5,10 +5,10 @@ import { SEND_INBOX_FILE_MAX_BYTES } from '@/services/constants';
 /** Next's own `getCloneableBody` fallback (`DEFAULT_BODY_CLONE_SIZE_LIMIT`). */
 const NEXT_DEFAULT_BODY_CLONE_LIMIT = 10 * 1024 * 1024;
 
-/** Re-evaluate next.config.mjs as the fork's Docker image builds it. */
+/** Re-evaluate next.config.mjs as the Docker image builds it. */
 const loadSelfHostedConfig = async () => {
   vi.stubEnv('NEXT_PUBLIC_APP_PLATFORM', 'web');
-  vi.stubEnv('SELF_HOSTED', 'true');
+  vi.stubEnv('BUILD_STANDALONE', 'true');
   vi.resetModules();
   return (await import('../../next.config.mjs')).default;
 };
@@ -55,15 +55,40 @@ describe('Proxy request body clone limit', () => {
   test('only the self-hosted Docker build covers the largest API route body', async () => {
     const selfHosted = await loadSelfHostedConfig();
 
-    // Fork: the image runs the full Node server (`pnpm start-web`), not a
-    // standalone tree.
-    expect(selfHosted.output).toBeUndefined();
+    expect(selfHosted.output).toBe('standalone');
     expect(selfHosted.experimental?.proxyClientMaxBodySize).toBeGreaterThanOrEqual(
       SEND_INBOX_FILE_MAX_BYTES,
     );
     expect(selfHosted.experimental?.proxyClientMaxBodySize).toBeGreaterThan(
       nextConfig.experimental?.proxyClientMaxBodySize as number,
     );
+  });
+});
+
+describe('Fork self-hosted image (full Node server)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  // The fork's Dockerfile runs `pnpm start-web` instead of the standalone tree
+  // and marks the build with SELF_HOSTED; it must get the same body budget.
+  test('SELF_HOSTED alone gets the self-hosted budget without standalone output', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_PLATFORM', 'web');
+    vi.stubEnv('SELF_HOSTED', 'true');
+    vi.resetModules();
+    const selfHosted = (await import('../../next.config.mjs')).default;
+
+    expect(selfHosted.output).toBeUndefined();
+    expect(selfHosted.experimental?.proxyClientMaxBodySize).toBeGreaterThanOrEqual(
+      SEND_INBOX_FILE_MAX_BYTES,
+    );
+  });
+
+  test('never enables the Turbopack build cache', () => {
+    expect(
+      (nextConfig.experimental as Record<string, unknown>)?.['turbopackFileSystemCacheForBuild'],
+    ).toBeUndefined();
   });
 });
 

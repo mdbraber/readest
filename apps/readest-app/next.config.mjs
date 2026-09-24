@@ -14,20 +14,33 @@ if (isDev) {
 }
 
 const exportOutput = appPlatform !== 'web' && !isDev;
-// Fork: the self-hosted Docker image runs the full Node server (`pnpm start-web`)
-// rather than upstream's standalone tree, so gate the self-hosted request-body
-// budget on SELF_HOSTED (set in the Dockerfile build stage) instead.
-const selfHostedServer = !exportOutput && process.env['SELF_HOSTED'] === 'true';
+// Opt-in standalone output, set only by the Docker production build
+// (Dockerfile). Every other path keeps the original behavior: Tauri `export`,
+// local `build-web` (output undefined), dev, and the Cloudflare/OpenNext
+// deploy — which forces standalone itself via NEXT_PRIVATE_STANDALONE.
+const standaloneOutput = !exportOutput && process.env['BUILD_STANDALONE'] === 'true';
+// A self-hosted image serves every request, book uploads included, from its own
+// Node server. Upstream's image is the standalone build; this fork's image runs
+// the full server (`pnpm start-web`) and marks itself with SELF_HOSTED at build
+// time instead (see Dockerfile). Either one gets the self-hosted body budget.
+const selfHostedServer =
+  standaloneOutput || (!exportOutput && process.env['SELF_HOSTED'] === 'true');
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Ensure Next.js uses SSG instead of SSR
   // https://nextjs.org/docs/pages/building-your-application/deploying/static-exports
-  output: exportOutput ? 'export' : undefined,
+  // The Docker production image opts into a self-contained `.next/standalone`
+  // tree (see Dockerfile) so it can ship only the traced runtime; all other
+  // web builds fall back to the default server output.
+  output: exportOutput ? 'export' : standaloneOutput ? 'standalone' : undefined,
   // Emit browser source maps for the Tauri export build so Sentry can
   // symbolicate crashes. `scripts/upload-sourcemaps.mjs` uploads them after the
   // build and strips the .map files, so they never ship inside the app bundle.
   productionBrowserSourceMaps: exportOutput,
+  // Monorepo: trace from the repo root so workspace packages land in the
+  // standalone tree. Only relevant to — and only set for — the Docker build.
+  outputFileTracingRoot: standaloneOutput ? path.join(__dirname, '../../') : undefined,
   pageExtensions: exportOutput ? ['jsx', 'tsx'] : ['js', 'jsx', 'ts', 'tsx'],
   // Note: This feature is required to use the Next.js Image component in SSG mode.
   // See https://nextjs.org/docs/messages/export-image-api for different workarounds.
@@ -36,8 +49,11 @@ const nextConfig = {
   },
   devIndicators: false,
   experimental: {
+    // Dev caching is on by default since Next 16.1. We deliberately do NOT
+    // enable Turbopack's build cache (turbopackFileSystemCacheForBuild, beta):
+    // a build interrupted mid-compile leaves a partial cache that the next
+    // build mishandles, fanning out workers until it exhausts RAM.
     turbopackFileSystemCacheForDev: true,
-    turbopackFileSystemCacheForBuild: true,
     // `middleware.ts` matches /api/*, so Next buffers a clone of every request
     // body to let both the middleware and the route handler read it. Past this
     // limit the clone is truncated and the handler sees a short body ending
@@ -48,7 +64,8 @@ const nextConfig = {
     // makes this ceiling an unauthenticated memory budget on every /api/* route
     // — so only the self-hosted image, which may proxy whole book files through
     // the Node server, gets real headroom. `selfHostedServer` is the right gate
-    // because SELF_HOSTED is set at build time by the Dockerfile alone: web.readest.com
+    // because BUILD_STANDALONE / SELF_HOSTED are set at build time by the
+    // Dockerfile alone: web.readest.com
     // runs on Cloudflare/Vercel, never on that image. (This value is baked into
     // required-server-files.json at build time, so a runtime env var could not
     // do the same job.)
